@@ -19,7 +19,7 @@ rtl/core/core_pkg.sv
 # ------------------------------------------------------------
 # CORE
 # ------------------------------------------------------------
-#rtl/core/regfile/*.sv
+rtl/core/regfile/*.sv
 #rtl/core/ifetch/*.sv
 #rtl/core/decode/*.sv
 rtl/core/execute/*.sv
