@@ -1,3 +1,6 @@
 work
 .nvim/svlangserver
 transcript
+sim/verilator/obj_dir
+sim/verilator/progs
+sim/vivado/
