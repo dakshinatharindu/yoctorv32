@@ -1,0 +1,26 @@
+{
+  "name": "yoctorv32 (Verilator + RV32IMA toolchain)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "mshr-h.VerilogHDL",
+        "ms-vscode.cpptools"
+      ],
+      "settings": {
+        "files.associations": {
+          "*.sv": "systemverilog",
+          "*.svh": "systemverilog"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "verilator --version && riscv32-unknown-elf-gcc --version && gtkwave --version",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  }
+}
