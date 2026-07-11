@@ -34,15 +34,18 @@ module regfile (
   core_pkg::xlen_t regs[32];
 
   // ---------------------------------------------------------------------------
-  // Asynchronous reads
+  // Asynchronous reads, with write-through bypass so a register written back
+  // this cycle is visible to a decode reading it in the same cycle.
   // ---------------------------------------------------------------------------
   always_comb begin
     if (rs1_addr == '0) rs1_rdata = '0;
+    else if (rd_we && (rd_addr == rs1_addr)) rs1_rdata = rd_wdata;
     else rs1_rdata = regs[rs1_addr];
   end
 
   always_comb begin
     if (rs2_addr == '0) rs2_rdata = '0;
+    else if (rd_we && (rd_addr == rs2_addr)) rs2_rdata = rd_wdata;
     else rs2_rdata = regs[rs2_addr];
   end
 
