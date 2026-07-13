@@ -39,6 +39,19 @@ module alu (
   logic [4:0] shamt;
   always_comb shamt = b[4:0];
 
+  // -------------------------------------------------------------------------
+  // RV32M multiply: single-cycle combinational 64-bit products.
+  // The low 32 bits of a product don't depend on the signedness
+  // interpretation of the operands, so mul_ss[31:0] serves ALU_MUL for all
+  // sign combinations.
+  // -------------------------------------------------------------------------
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic signed [2*XLEN-1:0] mul_ss, mul_su, mul_uu;  // low halves of mul_su/mul_uu unused
+  /* verilator lint_on UNUSEDSIGNAL */
+  assign mul_ss = signed'({{XLEN{a[XLEN-1]}}, a}) * signed'({{XLEN{b[XLEN-1]}}, b});
+  assign mul_su = signed'({{XLEN{a[XLEN-1]}}, a}) * signed'({{XLEN{1'b0}}, b});
+  assign mul_uu = signed'({{XLEN{1'b0}}, a}) * signed'({{XLEN{1'b0}}, b});
+
   // Result
   always_comb begin
     unique case (op)
@@ -55,7 +68,17 @@ module alu (
       ALU_COPY_A: y = a;
       ALU_COPY_B: y = b;
       ALU_ZERO:   y = '0;
-      default:    y = '0;
+
+      ALU_MUL:    y = xlen_t'(mul_ss[XLEN-1:0]);
+      ALU_MULH:   y = xlen_t'(mul_ss[2*XLEN-1:XLEN]);
+      ALU_MULHSU: y = xlen_t'(mul_su[2*XLEN-1:XLEN]);
+      ALU_MULHU:  y = xlen_t'(mul_uu[2*XLEN-1:XLEN]);
+
+      // DIV/DIVU/REM/REMU: dead value here — execute_stage muxes in the
+      // real result from the multi-cycle div_unit.
+      ALU_DIV, ALU_DIVU, ALU_REM, ALU_REMU: y = '0;
+
+      default: y = '0;
     endcase
   end
 

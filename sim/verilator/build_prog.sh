@@ -28,7 +28,7 @@ HEX="$OUT_DIR/$NAME.vh"
 RISCV_PREFIX=${RISCV_PREFIX:-riscv32-unknown-elf-}
 
 "${RISCV_PREFIX}gcc" \
-    -march=rv32i -mabi=ilp32 -mno-relax \
+    -march=rv32ima -mabi=ilp32 -mno-relax \
     -nostdlib -nostartfiles \
     -T tb/core/common/link.ld \
     -I tb/core/common \

@@ -31,10 +31,16 @@ module hazard_unit (
     // Branch/jump resolution from EX stage
     input logic branch_taken,
 
+    // RV32M: divider busy in EX (structural hazard — id_ex_q must hold the
+    // DIV/REM instruction in place, not advance to a bubble like a
+    // load-use hazard does).
+    input logic ex_div_stall,
+
     output logic pc_stall,
     output logic if_id_stall,
     output logic if_id_flush,
-    output logic id_ex_flush
+    output logic id_ex_flush,
+    output logic id_ex_stall
 );
 
   logic load_use_hazard;
@@ -43,10 +49,15 @@ module hazard_unit (
       ((if_id_uses_rs1 && (if_id_rs1_addr == id_ex_rd)) ||
        (if_id_uses_rs2 && (if_id_rs2_addr == id_ex_rd)));
 
-  assign pc_stall    = load_use_hazard;
-  assign if_id_stall = load_use_hazard;
+  assign pc_stall    = load_use_hazard || ex_div_stall;
+  assign if_id_stall = load_use_hazard || ex_div_stall;
 
   assign if_id_flush = branch_taken;
   assign id_ex_flush = load_use_hazard || branch_taken;
+
+  // Not OR'd with load_use_hazard: load-use needs id_ex_q to advance to a
+  // bubble while the load proceeds into EX; div-stall needs id_ex_q to hold
+  // the same DIV/REM instruction in place. These are different remedies.
+  assign id_ex_stall = ex_div_stall;
 
 endmodule

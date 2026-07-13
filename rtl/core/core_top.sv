@@ -80,6 +80,8 @@ module core_top (
   logic      wb_from_mem, wb_from_pc4;
   logic      is_branch, is_jal, is_jalr;
   branch_op_e br_op;
+  logic      is_amo;
+  amo_op_e   amo_op;
   logic      uses_rs1, uses_rs2;
   logic      illegal_instr;
 
@@ -103,6 +105,8 @@ module core_top (
       .is_jal         (is_jal),
       .is_jalr        (is_jalr),
       .br_op          (br_op),
+      .is_amo         (is_amo),
+      .amo_op         (amo_op),
       .uses_rs1       (uses_rs1),
       .uses_rs2       (uses_rs2),
       .illegal_instr  (illegal_instr)
@@ -136,7 +140,8 @@ module core_top (
   // Hazard detection (uses current ID-stage decode + current EX-stage id_ex_q)
   // ---------------------------------------------------------------------------
   id_ex_t id_ex_d, id_ex_q;
-  logic   id_ex_flush;
+  logic   id_ex_flush, id_ex_stall;
+  logic   ex_div_stall;
 
   hazard_unit u_hazard_unit (
       .id_ex_mem_rd   (id_ex_q.mem_rd),
@@ -147,10 +152,12 @@ module core_top (
       .if_id_uses_rs1 (uses_rs1),
       .if_id_uses_rs2 (uses_rs2),
       .branch_taken   (branch_taken),
+      .ex_div_stall   (ex_div_stall),
       .pc_stall       (pc_stall),
       .if_id_stall    (if_id_stall),
       .if_id_flush    (if_id_flush),
-      .id_ex_flush    (id_ex_flush)
+      .id_ex_flush    (id_ex_flush),
+      .id_ex_stall    (id_ex_stall)
   );
 
   always_comb begin
@@ -177,6 +184,8 @@ module core_top (
     id_ex_d.mem_signext     = mem_signext;
     id_ex_d.wb_from_mem     = wb_from_mem;
     id_ex_d.wb_from_pc4     = wb_from_pc4;
+    id_ex_d.is_amo          = is_amo;
+    id_ex_d.amo_op          = amo_op;
     id_ex_d.illegal_instr   = illegal_instr;
     id_ex_d.valid           = if_id_q.valid;
   end
@@ -184,6 +193,7 @@ module core_top (
   id_ex_reg u_id_ex_reg (
       .clk  (clk),
       .rst_n(rst_n),
+      .stall(id_ex_stall),
       .flush(id_ex_flush),
       .d    (id_ex_d),
       .q    (id_ex_q)
@@ -209,6 +219,8 @@ module core_top (
   );
 
   execute_stage u_execute_stage (
+      .clk           (clk),
+      .rst_n         (rst_n),
       .id_ex         (id_ex_q),
       .ex_mem_fwd_val(ex_mem_q.alu_result),
       .mem_wb_fwd_val(wb_data),
@@ -216,6 +228,7 @@ module core_top (
       .fwd_b_sel     (fwd_b_sel),
       .branch_taken  (branch_taken),
       .branch_target (branch_target),
+      .ex_div_stall  (ex_div_stall),
       .ex_mem_d      (ex_mem_d)
   );
 
@@ -232,12 +245,16 @@ module core_top (
   xlen_t lsu_rdata;
 
   lsu u_lsu (
+      .clk        (clk),
+      .rst_n      (rst_n),
       .addr       (ex_mem_q.alu_result),
       .wdata_in   (ex_mem_q.store_data),
       .mem_rd     (ex_mem_q.mem_rd),
       .mem_wr     (ex_mem_q.mem_wr),
       .mem_size   (ex_mem_q.mem_size),
       .mem_signext(ex_mem_q.mem_signext),
+      .is_amo     (ex_mem_q.is_amo),
+      .amo_op     (ex_mem_q.amo_op),
       .dmem_addr  (dmem_addr),
       .dmem_wdata (dmem_wdata),
       .dmem_wstrb (dmem_wstrb),

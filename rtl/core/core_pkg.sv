@@ -39,7 +39,22 @@ package core_pkg;
     ALU_SLTU   = 5'd9,
     ALU_COPY_A = 5'd10,
     ALU_COPY_B = 5'd11,
-    ALU_ZERO   = 5'd12
+    ALU_ZERO   = 5'd12,
+
+    // RV32M: single-cycle combinational multiply, folded into the ALU.
+    ALU_MUL    = 5'd13,
+    ALU_MULH   = 5'd14,
+    ALU_MULHSU = 5'd15,
+    ALU_MULHU  = 5'd16,
+
+    // RV32M: divide/remainder. The ALU itself has no state to host a
+    // multi-cycle divider, so these are dead values here — execute_stage
+    // muxes in the real result from div_unit. Kept as alu_op_e members so
+    // decode/execute_stage can dispatch on a single enum.
+    ALU_DIV    = 5'd17,
+    ALU_DIVU   = 5'd18,
+    ALU_REM    = 5'd19,
+    ALU_REMU   = 5'd20
   } alu_op_e;
 
   typedef enum logic [2:0] {
@@ -69,6 +84,25 @@ package core_pkg;
     MSZ_H = 2'd1,  // halfword
     MSZ_W = 2'd2   // word
   } mem_size_e;
+
+  // ---------------------------------------------------------------------------
+  // RV32A: AMO/LR/SC operation encoding (word-only, no aq/rl distinction —
+  // a single in-order hart with no reordering satisfies acquire/release
+  // vacuously, so aq/rl bits are decoded but otherwise ignored).
+  // ---------------------------------------------------------------------------
+  typedef enum logic [3:0] {
+    AMO_LR    = 4'd0,
+    AMO_SC    = 4'd1,
+    AMO_SWAP  = 4'd2,
+    AMO_ADD   = 4'd3,
+    AMO_XOR   = 4'd4,
+    AMO_AND   = 4'd5,
+    AMO_OR    = 4'd6,
+    AMO_MIN   = 4'd7,
+    AMO_MAX   = 4'd8,
+    AMO_MINU  = 4'd9,
+    AMO_MAXU  = 4'd10
+  } amo_op_e;
 
   // ---------------------------------------------------------------------------
   // Forwarding source select (EX stage operand muxes)
@@ -119,6 +153,9 @@ package core_pkg;
     logic wb_from_mem;
     logic wb_from_pc4;
 
+    logic    is_amo;
+    amo_op_e amo_op;
+
     logic illegal_instr;
     logic valid;
   } id_ex_t;
@@ -138,6 +175,9 @@ package core_pkg;
 
     logic wb_from_mem;
     logic wb_from_pc4;
+
+    logic    is_amo;
+    amo_op_e amo_op;
 
     logic valid;
   } ex_mem_t;
