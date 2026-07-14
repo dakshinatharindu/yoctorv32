@@ -1,6 +1,7 @@
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
 ARG VERILATOR_REF=stable
+ARG ICARUS_REF=master
 ARG RISCV_ARCH=rv32ima
 ARG RISCV_ABI=ilp32
 
@@ -56,6 +57,18 @@ RUN git clone --depth 1 --branch ${VERILATOR_REF} https://github.com/verilator/v
  && make -j"$(nproc)" \
  && make install \
  && rm -rf /tmp/verilator
+
+# ------------------------------------------------------------------
+# Icarus Verilog - build from source (packaged apt version lags
+# behind the SystemVerilog support this project's RTL/TB rely on)
+# ------------------------------------------------------------------
+RUN git clone --depth 1 --branch ${ICARUS_REF} https://github.com/steveicarus/iverilog /tmp/iverilog \
+ && cd /tmp/iverilog \
+ && sh autoconf.sh \
+ && ./configure --prefix=/usr/local \
+ && make -j"$(nproc)" \
+ && make install \
+ && rm -rf /tmp/iverilog
 
 # ------------------------------------------------------------------
 # RISC-V GNU toolchain - bare-metal newlib, rv32ima/ilp32

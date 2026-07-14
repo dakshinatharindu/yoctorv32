@@ -119,4 +119,11 @@ module core_tb;
     end
   end
 
+  initial begin
+    if ($test$plusargs("VCD")) begin
+      $dumpfile("core_tb.vcd");
+      $dumpvars(0, core_tb);
+    end
+  end
+
 endmodule

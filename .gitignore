@@ -4,6 +4,9 @@ transcript
 sim/verilator/obj_dir
 sim/verilator/progs
 sim/verilator/riscv-tests-progs
+sim/icarus/obj_dir
+sim/icarus/progs
+sim/icarus/riscv-tests-progs
 sim/vivado/
 .devcontainer/.claude-persist
 sim/.Xil/
