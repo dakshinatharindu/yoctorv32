@@ -5,7 +5,7 @@
 # behavioral memory) and run the official riscv-tests ISA suite
 # (vendored under tb/riscv-tests-env/riscv-tests) against it.
 #
-# RTL source list is read straight out of sim/questa/rtl.f, same
+# RTL source list is read straight out of sim/verilator/rtl.f, same
 # as sim/verilator/run_core_tests.sh (no core RTL is specific to
 # this suite). Kept as a separate script since the source tree,
 # include paths, and -march flags differ from the hand-written
@@ -79,7 +79,7 @@ while IFS= read -r line; do
             done
             ;;
     esac
-done < sim/questa/rtl.f
+done < sim/verilator/rtl.f
 
 echo "[INFO] Building Verilator model (${#RTL_FILES[@]} RTL files)..."
 verilator --binary --timing -Wno-fatal \

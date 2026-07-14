@@ -5,7 +5,7 @@
 # behavioral memory) and run every directed program under
 # tb/core/programs against it.
 #
-# RTL source list is read straight out of sim/questa/rtl.f
+# RTL source list is read straight out of sim/verilator/rtl.f
 # (skipping vlog-only switches) so there's a single place that
 # defines "what's in the core".
 #
@@ -26,7 +26,7 @@ PROG_OUT="$ROOT/sim/verilator/progs"
 mkdir -p "$PROG_OUT"
 
 # ----------------------------------------------------------
-# Pull RTL file list out of sim/questa/rtl.f (lines starting
+# Pull RTL file list out of sim/verilator/rtl.f (lines starting
 # with rtl/, glob-expanded), so it can't drift from Questa's.
 # ----------------------------------------------------------
 RTL_FILES=()
@@ -41,7 +41,7 @@ while IFS= read -r line; do
             done
             ;;
     esac
-done < sim/questa/rtl.f
+done < sim/verilator/rtl.f
 
 echo "[INFO] Building Verilator model (${#RTL_FILES[@]} RTL files)..."
 verilator --binary --timing -Wno-fatal \
