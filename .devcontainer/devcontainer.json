@@ -9,7 +9,8 @@
     "vscode": {
       "extensions": [
         "mshr-h.VerilogHDL",
-        "ms-vscode.cpptools"
+        "ms-vscode.cpptools",
+        "anthropic.claude-code"
       ],
       "settings": {
         "files.associations": {
@@ -19,7 +20,7 @@
       }
     }
   },
-  "postCreateCommand": "verilator --version && riscv32-unknown-elf-gcc --version && gtkwave --version",
+  "postCreateCommand": "verilator --version && riscv32-unknown-elf-gcc --version && gtkwave --version && bash /workspaces/yoctorv32/.devcontainer/setup-claude-persist.sh",
   "features": {
     "ghcr.io/devcontainers/features/git:1": {}
   }
