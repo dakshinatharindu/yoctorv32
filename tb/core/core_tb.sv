@@ -12,7 +12,10 @@
 // A cycle watchdog reports TIMEOUT if the program never reaches tohost
 // (e.g. the core hangs on a hazard bug instead of parking cleanly).
 //
-// Usage: +HEXFILE=path/to/prog.vh [+MAX_CYCLES=100000]
+// Usage: +HEXFILE=path/to/prog.vh [+MAX_CYCLES=100000] [+TOHOST_ADDR=1000]
+// TOHOST_ADDR defaults to 0x1000 (matching tb/core/common/test_macros.h);
+// override it for test suites whose linker script places tohost elsewhere
+// (e.g. sim/verilator/run_riscv_tests.sh passes +TOHOST_ADDR=3000).
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -22,7 +25,7 @@ module core_tb;
   import core_pkg::*;
 
   localparam int MEM_BYTES = 32768;
-  localparam xlen_t TOHOST_ADDR = 32'h0000_1000;
+  localparam xlen_t TOHOST_ADDR_DEFAULT = 32'h0000_1000;
   localparam int MAX_CYCLES_DEFAULT = 100000;
 
   logic clk = 1'b0;
@@ -55,6 +58,7 @@ module core_tb;
 
   logic test_done = 1'b0;
   logic [31:0] test_result = '0;
+  xlen_t tohost_addr;
 
   // Synchronous byte-strobed write + tohost snoop.
   always_ff @(posedge clk) begin
@@ -64,7 +68,7 @@ module core_tb;
       if (dmem_wstrb[2]) mem[dmem_addr+2] <= dmem_wdata[23:16];
       if (dmem_wstrb[3]) mem[dmem_addr+3] <= dmem_wdata[31:24];
 
-      if (dmem_addr == TOHOST_ADDR && !test_done) begin
+      if (dmem_addr == tohost_addr && !test_done) begin
         test_done   <= 1'b1;
         test_result <= dmem_wdata;
       end
@@ -87,6 +91,10 @@ module core_tb;
 
     if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) begin
       max_cycles = MAX_CYCLES_DEFAULT;
+    end
+
+    if (!$value$plusargs("TOHOST_ADDR=%h", tohost_addr)) begin
+      tohost_addr = TOHOST_ADDR_DEFAULT;
     end
 
     $display("core_tb: loaded %s", hexfile);

@@ -3,4 +3,15 @@ work
 transcript
 sim/verilator/obj_dir
 sim/verilator/progs
+sim/verilator/riscv-tests-progs
 sim/vivado/
+.devcontainer/.claude-persist
+sim/.Xil/
+
+
+# Ignore Vivado redundant files
+sim/vivado/.Xil/
+*.jou
+*.log
+*.str
+.claude/settings.local.json
