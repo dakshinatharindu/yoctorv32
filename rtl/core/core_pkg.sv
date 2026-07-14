@@ -23,6 +23,24 @@ package core_pkg;
   localparam logic [31:0] NOP_INSTR = 32'h0000_0013;
 
   // ---------------------------------------------------------------------------
+  // Trap causes (mcause values; exceptions only this pass — the interrupt bit
+  // is never set since no interrupt source is wired up yet).
+  // ---------------------------------------------------------------------------
+  localparam logic [31:0] CAUSE_ILLEGAL_INSTR = 32'd2;
+  localparam logic [31:0] CAUSE_BREAKPOINT = 32'd3;
+  localparam logic [31:0] CAUSE_LOAD_MISALIGNED = 32'd4;
+  localparam logic [31:0] CAUSE_STORE_MISALIGNED = 32'd6;
+  localparam logic [31:0] CAUSE_ECALL_M = 32'd11;
+
+  // CSR opcode encoding — matches funct3[1:0] directly, so decode can cast
+  // funct3 straight into this enum with no separate lookup.
+  typedef enum logic [1:0] {
+    CSR_RW = 2'b01,
+    CSR_RS = 2'b10,
+    CSR_RC = 2'b11
+  } csr_op_e;
+
+  // ---------------------------------------------------------------------------
   // ALU operation encoding
   // Keep this the single source of truth for ALU ops.
   // ---------------------------------------------------------------------------
@@ -156,11 +174,21 @@ package core_pkg;
     logic    is_amo;
     amo_op_e amo_op;
 
+    // SYSTEM: CSR ops / ECALL / EBREAK / MRET
+    logic        csr_en;
+    csr_op_e     csr_op;
+    logic        csr_use_imm;
+    logic [11:0] csr_addr;
+    logic        is_ecall;
+    logic        is_ebreak;
+    logic        is_mret;
+
     logic illegal_instr;
     logic valid;
   } id_ex_t;
 
   typedef struct packed {
+    xlen_t pc;          // the instruction's own PC (for mepc on trap entry)
     xlen_t pc4;         // pc+4, for JAL/JALR writeback
     xlen_t alu_result;  // ALU result / memory address
     xlen_t store_data;  // forwarded rs2 value, for stores
@@ -179,6 +207,17 @@ package core_pkg;
     logic    is_amo;
     amo_op_e amo_op;
 
+    // SYSTEM: CSR ops / ECALL / EBREAK / MRET (pass-through from id_ex_t,
+    // plus the operand resolved through EX-stage forwarding)
+    logic        illegal_instr;
+    logic        csr_en;
+    csr_op_e     csr_op;
+    logic [11:0] csr_addr;
+    xlen_t       csr_operand;
+    logic        is_ecall;
+    logic        is_ebreak;
+    logic        is_mret;
+
     logic valid;
   } ex_mem_t;
 
@@ -186,12 +225,14 @@ package core_pkg;
     xlen_t alu_result;
     xlen_t mem_rdata;
     xlen_t pc4;
+    xlen_t csr_rdata;
 
     reg_addr_t rd;
     logic      rd_we;
 
     logic wb_from_mem;
     logic wb_from_pc4;
+    logic wb_from_csr;
 
     logic valid;
   } mem_wb_t;

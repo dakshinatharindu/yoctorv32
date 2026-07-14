@@ -44,7 +44,11 @@ module lsu (
     output logic             dmem_re,
     input  core_pkg::xlen_t dmem_rdata,
 
-    output core_pkg::xlen_t rdata
+    output core_pkg::xlen_t rdata,
+
+    // Misalignment (feeds csr.sv's trap decision in the same MEM cycle)
+    output logic load_misaligned,
+    output logic store_misaligned
 );
 
   import core_pkg::*;
@@ -53,6 +57,28 @@ module lsu (
   assign byte_off  = addr[1:0];
   assign dmem_addr = {addr[31:2], 2'b00};
   assign dmem_re    = mem_rd;
+
+  // -------------------------------------------------------------------------
+  // Misalignment detection. Byte accesses are never misaligned. mem_size is
+  // already forced to MSZ_W for every AMO/LR/SC by decode.sv, so this single
+  // case also covers AMO alignment with no extra is_amo plumbing. SC.W/
+  // AMO*.W read-modify-write have mem_rd=1 AND mem_wr=1 (decode.sv), so both
+  // outputs fire together on those, which correctly resolves to the
+  // conventional Store/AMO trap cause once csr.sv checks store_misaligned
+  // before load_misaligned; LR.W has mem_wr=0 so only load_misaligned fires.
+  // -------------------------------------------------------------------------
+  logic misaligned;
+  always_comb begin
+    unique case (mem_size)
+      MSZ_B:   misaligned = 1'b0;
+      MSZ_H:   misaligned = addr[0];
+      MSZ_W:   misaligned = |addr[1:0];
+      default: misaligned = 1'b0;
+    endcase
+  end
+
+  assign load_misaligned  = mem_rd && misaligned;
+  assign store_misaligned = mem_wr && misaligned;
 
   // -------------------------------------------------------------------------
   // RV32A: LR/SC reservation (single global reservation set, word
@@ -101,35 +127,37 @@ module lsu (
     dmem_wdata = '0;
     dmem_wstrb = 4'b0000;
 
-    if (is_amo) begin
-      unique case (amo_op)
-        AMO_LR: begin
-          // Read-only: no write.
-        end
-        AMO_SC: begin
-          dmem_wdata = wdata_in;
-          dmem_wstrb = sc_success ? 4'b1111 : 4'b0000;
-        end
-        default: begin  // AMO*.W read-modify-write
-          dmem_wdata = amo_new_data;
-          dmem_wstrb = 4'b1111;
-        end
-      endcase
-    end else if (mem_wr) begin
-      unique case (mem_size)
-        MSZ_B: begin
-          dmem_wdata = {4{wdata_in[7:0]}};
-          dmem_wstrb = 4'b0001 << byte_off;
-        end
-        MSZ_H: begin
-          dmem_wdata = {2{wdata_in[15:0]}};
-          dmem_wstrb = byte_off[1] ? 4'b1100 : 4'b0011;
-        end
-        default: begin  // MSZ_W
-          dmem_wdata = wdata_in;
-          dmem_wstrb = 4'b1111;
-        end
-      endcase
+    if (!misaligned) begin
+      if (is_amo) begin
+        unique case (amo_op)
+          AMO_LR: begin
+            // Read-only: no write.
+          end
+          AMO_SC: begin
+            dmem_wdata = wdata_in;
+            dmem_wstrb = sc_success ? 4'b1111 : 4'b0000;
+          end
+          default: begin  // AMO*.W read-modify-write
+            dmem_wdata = amo_new_data;
+            dmem_wstrb = 4'b1111;
+          end
+        endcase
+      end else if (mem_wr) begin
+        unique case (mem_size)
+          MSZ_B: begin
+            dmem_wdata = {4{wdata_in[7:0]}};
+            dmem_wstrb = 4'b0001 << byte_off;
+          end
+          MSZ_H: begin
+            dmem_wdata = {2{wdata_in[15:0]}};
+            dmem_wstrb = byte_off[1] ? 4'b1100 : 4'b0011;
+          end
+          default: begin  // MSZ_W
+            dmem_wdata = wdata_in;
+            dmem_wstrb = 4'b1111;
+          end
+        endcase
+      end
     end
   end
 

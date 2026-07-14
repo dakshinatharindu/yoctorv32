@@ -24,7 +24,7 @@ rtl/core/ifetch/*.sv
 rtl/core/decode/*.sv
 rtl/core/execute/*.sv
 rtl/core/lsu/*.sv
-#rtl/core/csr/*.sv
+rtl/core/csr/*.sv
 rtl/core/hazard/*.sv
 rtl/core/pipeline/*.sv
 rtl/core/core_top.sv

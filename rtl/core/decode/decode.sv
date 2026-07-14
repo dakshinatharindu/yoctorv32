@@ -61,6 +61,15 @@ module decode (
     output logic uses_rs1,
     output logic uses_rs2,
 
+    // SYSTEM: CSR ops / ECALL / EBREAK / MRET
+    output logic            csr_en,
+    output core_pkg::csr_op_e csr_op,
+    output logic            csr_use_imm,
+    output logic [11:0]     csr_addr,
+    output logic            is_ecall,
+    output logic            is_ebreak,
+    output logic            is_mret,
+
     // Status
     output logic illegal_instr
 );
@@ -146,6 +155,14 @@ module decode (
 
     uses_rs1        = 1'b0;
     uses_rs2        = 1'b0;
+
+    csr_en          = 1'b0;
+    csr_op          = CSR_RW;
+    csr_use_imm     = 1'b0;
+    csr_addr        = '0;
+    is_ecall        = 1'b0;
+    is_ebreak       = 1'b0;
+    is_mret         = 1'b0;
 
     illegal_instr   = 1'b0;
 
@@ -445,10 +462,37 @@ module decode (
 
       // -----------------------------------------------------------------------
       // SYSTEM
-      // For now, mark illegal. Later extend for ECALL/EBREAK/MRET/CSR ops.
+      // funct3=000 is ECALL/EBREAK/MRET, selected by the funct12 (instr[31:20])
+      // field; any other funct3 is a CSR instruction, with csr_op taken
+      // directly from funct3[1:0] (CSR_RW=01/CSR_RS=10/CSR_RC=11) and
+      // csr_use_imm = funct3[2] selecting the *I variants, whose rs1_addr
+      // field (already generically extracted above) is actually a 5-bit
+      // unsigned immediate rather than a register index.
+      // Whether a given csr_addr is actually implemented/writable is not
+      // decided here — that is resolved later by the csr module in MEM.
       // -----------------------------------------------------------------------
       OPCODE_SYSTEM: begin
-        illegal_instr = 1'b1;
+        unique case (funct3)
+          3'b000: begin
+            unique case (instr[31:20])
+              12'h000: is_ecall  = 1'b1;
+              12'h001: is_ebreak = 1'b1;
+              12'h302: is_mret   = 1'b1;
+              default: illegal_instr = 1'b1;
+            endcase
+          end
+
+          3'b001, 3'b010, 3'b011, 3'b101, 3'b110, 3'b111: begin
+            csr_en      = 1'b1;
+            csr_addr    = instr[31:20];
+            csr_op      = csr_op_e'(funct3[1:0]);
+            csr_use_imm = funct3[2];
+            rd_we       = 1'b1;
+            uses_rs1    = !funct3[2];
+          end
+
+          default: illegal_instr = 1'b1;  // funct3=100: reserved
+        endcase
       end
 
       default: begin

@@ -12,8 +12,14 @@ module execute_stage (
     input logic rst_n,
 
     /* verilator lint_off UNUSEDSIGNAL */
-    input core_pkg::id_ex_t id_ex,  // rs1_addr/rs2_addr/illegal_instr consumed outside this stage
+    input core_pkg::id_ex_t id_ex,  // rs2_addr consumed outside this stage
     /* verilator lint_on UNUSEDSIGNAL */
+
+    // From hazard_unit — abort an in-flight divide if id_ex_q is being
+    // squashed this cycle (e.g. an older MEM-stage trap), so a stale
+    // divide result can never later be attributed to an unrelated
+    // instruction.
+    input logic id_ex_flush,
 
     // Forwarding
     input core_pkg::xlen_t    ex_mem_fwd_val,  // EX/MEM alu_result
@@ -54,6 +60,13 @@ module execute_stage (
 
   assign alu_a = id_ex.alu_src1_is_pc ? id_ex.pc : rs1_val_fwd;
   assign alu_b = id_ex.alu_src2_is_imm ? id_ex.imm : rs2_val_fwd;
+
+  // CSR operand: register-operand variants (CSRRW/S/C) reuse the normal rs1
+  // forwarding mux above; *I variants (CSRRWI/SI/CI) use the 5-bit unsigned
+  // immediate carried in rs1_addr instead (decode.sv sets uses_rs1=0 for
+  // these, so no forwarding hazard is ever created against that field).
+  xlen_t csr_operand;
+  assign csr_operand = id_ex.csr_use_imm ? xlen_t'({27'b0, id_ex.rs1_addr}) : rs1_val_fwd;
 
   alu u_alu (
       .a  (alu_a),
@@ -99,6 +112,7 @@ module execute_stage (
   div_unit u_div_unit (
       .clk        (clk),
       .rst_n      (rst_n),
+      .flush      (id_ex_flush),
       .start      (div_start),
       .op         (id_ex.alu_op),
       .dividend_in(rs1_val_fwd),
@@ -117,21 +131,30 @@ module execute_stage (
     if (ex_div_stall) begin
       ex_mem_d = '0;
     end else begin
-      ex_mem_d             = '0;
-      ex_mem_d.pc4         = id_ex.pc4;
-      ex_mem_d.alu_result  = (is_div_op && div_done) ? div_result : alu_y;
-      ex_mem_d.store_data  = rs2_val_fwd;
-      ex_mem_d.rd          = id_ex.rd;
-      ex_mem_d.rd_we       = id_ex.rd_we;
-      ex_mem_d.mem_rd      = id_ex.mem_rd;
-      ex_mem_d.mem_wr      = id_ex.mem_wr;
-      ex_mem_d.mem_size    = id_ex.mem_size;
-      ex_mem_d.mem_signext = id_ex.mem_signext;
-      ex_mem_d.wb_from_mem = id_ex.wb_from_mem;
-      ex_mem_d.wb_from_pc4 = id_ex.wb_from_pc4;
-      ex_mem_d.is_amo      = id_ex.is_amo;
-      ex_mem_d.amo_op      = id_ex.amo_op;
-      ex_mem_d.valid       = id_ex.valid;
+      ex_mem_d              = '0;
+      ex_mem_d.pc           = id_ex.pc;
+      ex_mem_d.pc4          = id_ex.pc4;
+      ex_mem_d.alu_result   = (is_div_op && div_done) ? div_result : alu_y;
+      ex_mem_d.store_data   = rs2_val_fwd;
+      ex_mem_d.rd           = id_ex.rd;
+      ex_mem_d.rd_we        = id_ex.rd_we;
+      ex_mem_d.mem_rd       = id_ex.mem_rd;
+      ex_mem_d.mem_wr       = id_ex.mem_wr;
+      ex_mem_d.mem_size     = id_ex.mem_size;
+      ex_mem_d.mem_signext  = id_ex.mem_signext;
+      ex_mem_d.wb_from_mem  = id_ex.wb_from_mem;
+      ex_mem_d.wb_from_pc4  = id_ex.wb_from_pc4;
+      ex_mem_d.is_amo       = id_ex.is_amo;
+      ex_mem_d.amo_op       = id_ex.amo_op;
+      ex_mem_d.illegal_instr = id_ex.illegal_instr;
+      ex_mem_d.csr_en       = id_ex.csr_en;
+      ex_mem_d.csr_op       = id_ex.csr_op;
+      ex_mem_d.csr_addr     = id_ex.csr_addr;
+      ex_mem_d.csr_operand  = csr_operand;
+      ex_mem_d.is_ecall     = id_ex.is_ecall;
+      ex_mem_d.is_ebreak    = id_ex.is_ebreak;
+      ex_mem_d.is_mret      = id_ex.is_mret;
+      ex_mem_d.valid        = id_ex.valid;
     end
   end
 

@@ -21,6 +21,12 @@ module div_unit (
     input logic clk,
     input logic rst_n,
 
+    // Abort an in-flight divide (e.g. id_ex_q squashed by an older MEM-stage
+    // trap) — without this, an abandoned divide keeps running in the
+    // background and its later `done`/`result` would be wrongly attributed
+    // to whatever unrelated instruction occupies EX by then.
+    input logic               flush,
+
     input logic               start,  // 1-cycle pulse: latch operands, begin
     input core_pkg::alu_op_e  op,     // ALU_DIV / ALU_DIVU / ALU_REM / ALU_REMU
     input core_pkg::xlen_t    dividend_in,
@@ -73,7 +79,7 @@ module div_unit (
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
+    if (!rst_n || flush) begin
       state_q <= ST_IDLE;
       cnt_q   <= '0;
     end else if (state_q == ST_IDLE) begin
