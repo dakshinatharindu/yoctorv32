@@ -22,6 +22,14 @@
 // preempts mid-flight AMO read-modify-write or a pipeline bubble). mie
 // stays fully read/write software storage (masks which enabled sources can
 // interrupt).
+//
+// PMP (pmpcfg0-3, pmpaddr0-15) is implemented as plain WARL storage with no
+// enforcement — confirmed necessary, not speculative: tracing a real Linux
+// boot showed the kernel's early M-mode setup unconditionally executing
+// `csrw pmpaddr0, ...` / `csrw pmpcfg0, ...`, which would otherwise
+// illegal-instruction-trap. No access control is meaningful here anyway —
+// this core never enters S/U mode, so PMP has no privilege boundary left to
+// enforce (matches remu's own approach, per the earlier gap-analysis).
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -77,6 +85,12 @@ module csr (
   localparam logic [11:0] CsrMimpid = 12'hF13;
   localparam logic [11:0] CsrMhartid = 12'hF14;
 
+  // PMP: pmpcfg0..3 (0x3A0-0x3A3, 16 entries' worth of config bytes) and
+  // pmpaddr0..15 (0x3B0-0x3BF) — plain WARL storage, checked by range
+  // rather than enumerated individually (see is_pmpcfg/is_pmpaddr below).
+  localparam logic [11:0] CsrPmpcfg0Base = 12'h3A0;
+  localparam logic [11:0] CsrPmpaddr0Base = 12'h3B0;
+
   // misa = RV32IMA: MXL[31:30]=01 (RV32), Extensions A(0)|I(8)|M(12).
   localparam xlen_t MisaValue = 32'h4000_1101;
 
@@ -86,6 +100,8 @@ module csr (
   logic  mstatus_mie_q, mstatus_mpie_q;
   xlen_t mie_q;
   xlen_t mtvec_q, mscratch_q, mepc_q, mcause_q, mtval_q;
+  xlen_t pmpcfg_q[4];
+  xlen_t pmpaddr_q[16];
 
   xlen_t mstatus_rdata;
   // bit3=MIE, bit7=MPIE, bits[12:11]=MPP hardwired to 2'b11 (M-mode only,
@@ -105,28 +121,37 @@ module csr (
   // Address decode / read
   // ---------------------------------------------------------------------
   logic csr_addr_known;
+  logic is_pmpcfg, is_pmpaddr;
+  assign is_pmpcfg  = (csr_addr >= CsrPmpcfg0Base) && (csr_addr <= (CsrPmpcfg0Base + 12'd3));
+  assign is_pmpaddr = (csr_addr >= CsrPmpaddr0Base) && (csr_addr <= (CsrPmpaddr0Base + 12'd15));
 
   always_comb begin
     csr_addr_known = 1'b1;
-    unique case (csr_addr)
-      CsrMstatus:   csr_rdata = mstatus_rdata;
-      CsrMisa:      csr_rdata = MisaValue;
-      CsrMie:       csr_rdata = mie_q;
-      CsrMtvec:     csr_rdata = mtvec_q;
-      CsrMscratch:  csr_rdata = mscratch_q;
-      CsrMepc:      csr_rdata = mepc_q;
-      CsrMcause:    csr_rdata = mcause_q;
-      CsrMtval:     csr_rdata = mtval_q;
-      CsrMip:       csr_rdata = mip_rdata;
-      CsrMvendorid: csr_rdata = 32'd0;
-      CsrMarchid:   csr_rdata = 32'd0;
-      CsrMimpid:    csr_rdata = 32'd0;
-      CsrMhartid:   csr_rdata = 32'd0;
-      default: begin
-        csr_addr_known = 1'b0;
-        csr_rdata      = '0;
-      end
-    endcase
+    if (is_pmpcfg) begin
+      csr_rdata = pmpcfg_q[csr_addr[1:0]];
+    end else if (is_pmpaddr) begin
+      csr_rdata = pmpaddr_q[csr_addr[3:0]];
+    end else begin
+      unique case (csr_addr)
+        CsrMstatus:   csr_rdata = mstatus_rdata;
+        CsrMisa:      csr_rdata = MisaValue;
+        CsrMie:       csr_rdata = mie_q;
+        CsrMtvec:     csr_rdata = mtvec_q;
+        CsrMscratch:  csr_rdata = mscratch_q;
+        CsrMepc:      csr_rdata = mepc_q;
+        CsrMcause:    csr_rdata = mcause_q;
+        CsrMtval:     csr_rdata = mtval_q;
+        CsrMip:       csr_rdata = mip_rdata;
+        CsrMvendorid: csr_rdata = 32'd0;
+        CsrMarchid:   csr_rdata = 32'd0;
+        CsrMimpid:    csr_rdata = 32'd0;
+        CsrMhartid:   csr_rdata = 32'd0;
+        default: begin
+          csr_addr_known = 1'b0;
+          csr_rdata      = '0;
+        end
+      endcase
+    end
   end
 
   // ---------------------------------------------------------------------
@@ -236,6 +261,8 @@ module csr (
       mepc_q         <= '0;
       mcause_q       <= '0;
       mtval_q        <= '0;
+      for (int i = 0; i < 4; i++) pmpcfg_q[i] <= '0;
+      for (int i = 0; i < 16; i++) pmpaddr_q[i] <= '0;
     end else if (trap_taken) begin
       mepc_q         <= {pc[31:2], 2'b00};
       mcause_q       <= trap_cause;
@@ -246,19 +273,25 @@ module csr (
       mstatus_mie_q  <= mstatus_mpie_q;
       mstatus_mpie_q <= 1'b1;
     end else if (csr_write_en) begin
-      unique case (csr_addr)
-        CsrMstatus: begin
-          mstatus_mie_q  <= csr_new_value[3];
-          mstatus_mpie_q <= csr_new_value[7];
-        end
-        CsrMie:      mie_q      <= csr_new_value;
-        CsrMtvec:    mtvec_q    <= {csr_new_value[31:2], 2'b00};
-        CsrMscratch: mscratch_q <= csr_new_value;
-        CsrMepc:     mepc_q     <= {csr_new_value[31:2], 2'b00};
-        CsrMcause:   mcause_q   <= csr_new_value;
-        CsrMtval:    mtval_q    <= csr_new_value;
-        default:     ;  // misa/mip/mvendorid/marchid/mimpid/mhartid: no storage, no-op
-      endcase
+      if (is_pmpcfg) begin
+        pmpcfg_q[csr_addr[1:0]] <= csr_new_value;
+      end else if (is_pmpaddr) begin
+        pmpaddr_q[csr_addr[3:0]] <= csr_new_value;
+      end else begin
+        unique case (csr_addr)
+          CsrMstatus: begin
+            mstatus_mie_q  <= csr_new_value[3];
+            mstatus_mpie_q <= csr_new_value[7];
+          end
+          CsrMie:      mie_q      <= csr_new_value;
+          CsrMtvec:    mtvec_q    <= {csr_new_value[31:2], 2'b00};
+          CsrMscratch: mscratch_q <= csr_new_value;
+          CsrMepc:     mepc_q     <= {csr_new_value[31:2], 2'b00};
+          CsrMcause:   mcause_q   <= csr_new_value;
+          CsrMtval:    mtval_q    <= csr_new_value;
+          default:     ;  // misa/mip/mvendorid/marchid/mimpid/mhartid: no storage, no-op
+        endcase
+      end
     end
   end
 
