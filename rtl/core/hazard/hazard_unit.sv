@@ -16,6 +16,13 @@
 // Branch/jump mispredict: resolved combinationally in EX. Squashes the
 // instruction currently in ID (about to enter ID/EX) and the one currently
 // being fetched (about to enter IF/ID), and redirects the PC.
+//
+// pc_stall and if_id_stall share one cycle-for-cycle formula on purpose:
+// the extra in-flight instruction that a synchronous-read imem's 1-cycle
+// latency leaves stuck ahead of if_id_reg when a stall begins is preserved
+// by a skid buffer in core_top.sv (see if_id_d there), not by stretching
+// the stall itself — stretching it just discards a different instruction
+// instead (verified the hard way; see core_top.sv's comment for the trace).
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -41,6 +48,12 @@ module hazard_unit (
     // load-use hazard does).
     input logic ex_div_stall,
 
+    // RV32A: AMO*.W read-modify-write in MEM needs its address held for one
+    // extra cycle so the deferred write can reuse it once dmem_rdata's old
+    // value has arrived (lsu.sv). Structurally the same idea as
+    // ex_div_stall, but the held instruction lives in ex_mem_q, not id_ex_q.
+    input logic amo_stall,
+
     // Trap/MRET redirect from csr.sv (MEM stage) — an older instruction
     // than anything currently in IF/ID/EX, so it must squash all three.
     input logic sys_redirect,
@@ -50,7 +63,8 @@ module hazard_unit (
     output logic if_id_flush,
     output logic id_ex_flush,
     output logic id_ex_stall,
-    output logic ex_mem_flush
+    output logic ex_mem_flush,
+    output logic ex_mem_stall
 );
 
   logic load_use_hazard;
@@ -59,20 +73,25 @@ module hazard_unit (
       ((if_id_uses_rs1 && (if_id_rs1_addr == id_ex_rd)) ||
        (if_id_uses_rs2 && (if_id_rs2_addr == id_ex_rd)));
 
-  assign pc_stall    = load_use_hazard || ex_div_stall;
-  assign if_id_stall = load_use_hazard || ex_div_stall;
+  assign pc_stall    = load_use_hazard || ex_div_stall || amo_stall;
+  assign if_id_stall = load_use_hazard || ex_div_stall || amo_stall;
 
   assign if_id_flush = branch_taken || sys_redirect;
   assign id_ex_flush = load_use_hazard || branch_taken || sys_redirect;
 
   // Not OR'd with load_use_hazard: load-use needs id_ex_q to advance to a
-  // bubble while the load proceeds into EX; div-stall needs id_ex_q to hold
-  // the same DIV/REM instruction in place. These are different remedies.
-  assign id_ex_stall = ex_div_stall;
+  // bubble while the load proceeds into EX; div-stall/amo-stall need id_ex_q
+  // to hold the instruction behind the multi-cycle op in place instead.
+  assign id_ex_stall = ex_div_stall || amo_stall;
 
   // A MEM-stage trap/MRET redirect is strictly older than whatever is
   // currently in ex_mem_q's producing instruction (id_ex_q, this cycle's EX
   // instruction) — that instruction must never reach MEM/WB.
   assign ex_mem_flush = sys_redirect;
+
+  // Hold ex_mem_q in place for the AMO*.W read-issue cycle (see amo_stall's
+  // port comment) — flush still takes priority in ex_mem_reg, so a
+  // misaligned/trapping AMO aborts via sys_redirect with no special-casing.
+  assign ex_mem_stall = amo_stall;
 
 endmodule

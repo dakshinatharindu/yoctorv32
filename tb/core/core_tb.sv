@@ -12,6 +12,11 @@
 // A cycle watchdog reports TIMEOUT if the program never reaches tohost
 // (e.g. the core hangs on a hazard bug instead of parking cleanly).
 //
+// imem/dmem reads are synchronous (registered), matching real FPGA Block
+// RAM timing (data arrives one cycle after the address) — the same
+// standard read-first BRAM-inference template Vivado/Quartus recognize, so
+// this model is representative of what the core will see with real BRAM.
+//
 // Usage: +HEXFILE=path/to/prog.vh [+MAX_CYCLES=100000] [+TOHOST_ADDR=1000]
 // TOHOST_ADDR defaults to 0x1000 (matching tb/core/common/test_macros.h);
 // override it for test suites whose linker script places tohost elsewhere
@@ -52,9 +57,12 @@ module core_tb;
       .dmem_rdata(dmem_rdata)
   );
 
-  // Zero-wait-state combinational reads, same style as core_top expects.
-  assign imem_rdata = {mem[imem_addr+3], mem[imem_addr+2], mem[imem_addr+1], mem[imem_addr+0]};
-  assign dmem_rdata = {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr+0]};
+  // Synchronous reads (registered output), matching real BRAM: data for the
+  // address driven this cycle arrives on imem_rdata/dmem_rdata next cycle.
+  always_ff @(posedge clk) begin
+    imem_rdata <= {mem[imem_addr+3], mem[imem_addr+2], mem[imem_addr+1], mem[imem_addr+0]};
+    dmem_rdata <= {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr+0]};
+  end
 
   logic test_done = 1'b0;
   logic [31:0] test_result = '0;

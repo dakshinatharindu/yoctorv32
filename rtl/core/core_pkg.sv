@@ -223,7 +223,6 @@ package core_pkg;
 
   typedef struct packed {
     xlen_t alu_result;
-    xlen_t mem_rdata;
     xlen_t pc4;
     xlen_t csr_rdata;
 
@@ -233,6 +232,15 @@ package core_pkg;
     logic wb_from_mem;
     logic wb_from_pc4;
     logic wb_from_csr;
+
+    // Carried forward for load_align (rtl/core/lsu/load_align.sv), which
+    // decodes the load value one stage later than lsu.sv itself, once
+    // dmem_rdata (synchronous-read) has actually arrived for this address.
+    mem_size_e mem_size;
+    logic      mem_signext;
+    logic      is_amo;
+    amo_op_e   amo_op;
+    logic      sc_success;
 
     logic valid;
   } mem_wb_t;

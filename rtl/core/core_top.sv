@@ -6,10 +6,14 @@
 // - Bare-minimal M-mode-only CSR/trap machinery: ECALL/EBREAK/illegal
 //   instruction/misaligned load-store traps, MRET, CSRRW/S/C/WI/SI/CI.
 //   No interrupts yet (mie/mip are plain storage with no hardware consumer).
-// - Instruction and data memories are external, zero-wait-state, combinational
-//   read ports (same style as regfile's async reads) — see imem_*/dmem_* ports.
+// - Instruction and data memories are external, synchronous-read (1-cycle
+//   latency, matching real FPGA Block RAM) — see imem_*/dmem_* ports. Fetch
+//   absorbs this into the pipeline with no stall (ifetch.sv); loads/stores
+//   likewise use the natural MEM->WB register gap with no stall, except
+//   AMO*.W's deferred read-modify-write write (lsu.sv's amo_stall).
 // - Load-use hazards stall one cycle; EX/MEM and MEM/WB forwarding cover the
-//   rest; branches/jumps resolve in EX (2-cycle penalty when taken).
+//   rest; branches/jumps resolve in EX (3-cycle penalty when taken, one
+//   more than a zero-latency memory would need — see ifetch.sv).
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -36,6 +40,7 @@ module core_top (
   // IF stage
   // ---------------------------------------------------------------------------
   xlen_t if_pc, if_instr;
+  logic  if_valid;
   logic  pc_stall;
   logic  branch_taken;
   xlen_t branch_target;
@@ -53,15 +58,63 @@ module core_top (
       .imem_addr           (imem_addr),
       .imem_rdata          (imem_rdata),
       .pc                  (if_pc),
-      .instr               (if_instr)
+      .instr               (if_instr),
+      .valid               (if_valid)
   );
 
   if_id_t if_id_d, if_id_q;
   logic   if_id_stall, if_id_flush;
 
-  assign if_id_d.pc    = if_pc;
-  assign if_id_d.instr = if_instr;
-  assign if_id_d.valid = 1'b1;
+  // ---------------------------------------------------------------------------
+  // 1-entry fetch skid buffer.
+  //
+  // ifetch's fetch_pc_q/imem_rdata are an unconditional 1-cycle delay of
+  // pc_q, so by the time a load-use/div/amo stall is first detected, there
+  // are already TWO instructions ahead of if_id_q in the fetch pipe: one
+  // arriving on ifetch's output THIS cycle (fetch_pc_q/imem_rdata), and one
+  // pc_q is addressing THIS cycle (arriving next). if_id_reg only has room
+  // to hold if_id_q's own (stalled) content, so without buffering, the one
+  // arriving THIS cycle is silently discarded once the stall lifts and
+  // if_id_reg captures whatever ifetch has moved on to by then — verified
+  // this the hard way: extending if_id_stall by a cycle (an earlier attempt)
+  // just shifted the loss to discard the arriving instruction directly,
+  // since if_id_stall was already asserted the very cycle it arrived.
+  //
+  // Fix: latch ifetch's output once, on the rising edge of if_id_stall
+  // (the one cycle whose arrival is at risk), and feed if_id_reg from that
+  // skid entry instead of ifetch's live output for exactly the one cycle
+  // right after the stall lifts, then return to normal.
+  // ---------------------------------------------------------------------------
+  if_id_t skid_q;
+  logic   skid_pending_q;
+  logic   if_id_stall_q;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      if_id_stall_q  <= 1'b0;
+      skid_pending_q <= 1'b0;
+    end else begin
+      if_id_stall_q <= if_id_stall;
+      if (if_id_stall && !if_id_stall_q) begin
+        skid_q.pc      <= if_pc;
+        skid_q.instr   <= if_instr;
+        skid_q.valid   <= if_valid;
+        skid_pending_q <= 1'b1;
+      end else if (!if_id_stall) begin
+        skid_pending_q <= 1'b0;
+      end
+    end
+  end
+
+  always_comb begin
+    if (skid_pending_q) begin
+      if_id_d = skid_q;
+    end else begin
+      if_id_d.pc    = if_pc;
+      if_id_d.instr = if_instr;
+      if_id_d.valid = if_valid;
+    end
+  end
 
   if_id_reg u_if_id_reg (
       .clk  (clk),
@@ -160,7 +213,8 @@ module core_top (
   id_ex_t id_ex_d, id_ex_q;
   logic   id_ex_flush, id_ex_stall;
   logic   ex_div_stall;
-  logic   ex_mem_flush;
+  logic   amo_stall;
+  logic   ex_mem_flush, ex_mem_stall;
 
   hazard_unit u_hazard_unit (
       .id_ex_mem_rd   (id_ex_q.mem_rd),
@@ -173,13 +227,15 @@ module core_top (
       .if_id_uses_rs2 (uses_rs2),
       .branch_taken   (branch_taken),
       .ex_div_stall   (ex_div_stall),
+      .amo_stall      (amo_stall),
       .sys_redirect   (sys_redirect),
       .pc_stall       (pc_stall),
       .if_id_stall    (if_id_stall),
       .if_id_flush    (if_id_flush),
       .id_ex_flush    (id_ex_flush),
       .id_ex_stall    (id_ex_stall),
-      .ex_mem_flush   (ex_mem_flush)
+      .ex_mem_flush   (ex_mem_flush),
+      .ex_mem_stall   (ex_mem_stall)
   );
 
   always_comb begin
@@ -265,6 +321,7 @@ module core_top (
   ex_mem_reg u_ex_mem_reg (
       .clk  (clk),
       .rst_n(rst_n),
+      .stall(ex_mem_stall),
       .flush(ex_mem_flush),
       .d    (ex_mem_d),
       .q    (ex_mem_q)
@@ -273,8 +330,8 @@ module core_top (
   // ---------------------------------------------------------------------------
   // MEM stage
   // ---------------------------------------------------------------------------
-  xlen_t lsu_rdata;
-  logic  load_misaligned, store_misaligned;
+  logic load_misaligned, store_misaligned;
+  logic sc_success;
 
   lsu u_lsu (
       .clk             (clk),
@@ -284,7 +341,6 @@ module core_top (
       .mem_rd          (ex_mem_q.mem_rd),
       .mem_wr          (ex_mem_q.mem_wr),
       .mem_size        (ex_mem_q.mem_size),
-      .mem_signext     (ex_mem_q.mem_signext),
       .is_amo          (ex_mem_q.is_amo),
       .amo_op          (ex_mem_q.amo_op),
       .dmem_addr       (dmem_addr),
@@ -292,9 +348,10 @@ module core_top (
       .dmem_wstrb      (dmem_wstrb),
       .dmem_re         (dmem_re),
       .dmem_rdata      (dmem_rdata),
-      .rdata           (lsu_rdata),
       .load_misaligned (load_misaligned),
-      .store_misaligned(store_misaligned)
+      .store_misaligned(store_misaligned),
+      .sc_success      (sc_success),
+      .amo_stall       (amo_stall)
   );
 
   xlen_t csr_rdata_w;
@@ -323,18 +380,35 @@ module core_top (
 
   mem_wb_t mem_wb_d;
 
+  // While an AMO*.W read-modify-write is in its read-issue cycle (amo_stall,
+  // phase 0), ex_mem_q is held — it still holds the SAME instruction it did
+  // last cycle. Without this gate, mem_wb_d (computed unconditionally from
+  // ex_mem_q every cycle, since mem_wb_reg has no stall port) would latch
+  // the AMO's fields into mem_wb_q twice — once from each phase — double-
+  // committing the register write. Suppressing it during phase 0 makes the
+  // AMO's real WB commit land on phase 1's cycle, exactly when dmem_rdata
+  // has arrived and load_align can produce the correct old-value result.
+  // Mirrors execute_stage.sv's identical ex_div_stall gating of ex_mem_d.
   always_comb begin
-    mem_wb_d             = '0;
-    mem_wb_d.alu_result  = ex_mem_q.alu_result;
-    mem_wb_d.mem_rdata   = lsu_rdata;
-    mem_wb_d.pc4         = ex_mem_q.pc4;
-    mem_wb_d.csr_rdata   = csr_rdata_w;
-    mem_wb_d.rd          = ex_mem_q.rd;
-    mem_wb_d.rd_we       = ex_mem_q.rd_we && !trap_taken;
-    mem_wb_d.wb_from_mem = ex_mem_q.wb_from_mem;
-    mem_wb_d.wb_from_pc4 = ex_mem_q.wb_from_pc4;
-    mem_wb_d.wb_from_csr = ex_mem_q.csr_en;
-    mem_wb_d.valid       = ex_mem_q.valid;
+    if (amo_stall) begin
+      mem_wb_d = '0;
+    end else begin
+      mem_wb_d             = '0;
+      mem_wb_d.alu_result  = ex_mem_q.alu_result;
+      mem_wb_d.pc4         = ex_mem_q.pc4;
+      mem_wb_d.csr_rdata   = csr_rdata_w;
+      mem_wb_d.rd          = ex_mem_q.rd;
+      mem_wb_d.rd_we       = ex_mem_q.rd_we && !trap_taken;
+      mem_wb_d.wb_from_mem = ex_mem_q.wb_from_mem;
+      mem_wb_d.wb_from_pc4 = ex_mem_q.wb_from_pc4;
+      mem_wb_d.wb_from_csr = ex_mem_q.csr_en;
+      mem_wb_d.mem_size    = ex_mem_q.mem_size;
+      mem_wb_d.mem_signext = ex_mem_q.mem_signext;
+      mem_wb_d.is_amo      = ex_mem_q.is_amo;
+      mem_wb_d.amo_op      = ex_mem_q.amo_op;
+      mem_wb_d.sc_success  = sc_success;
+      mem_wb_d.valid       = ex_mem_q.valid;
+    end
   end
 
   mem_wb_reg u_mem_wb_reg (
@@ -347,8 +421,25 @@ module core_top (
   // ---------------------------------------------------------------------------
   // WB stage
   // ---------------------------------------------------------------------------
+  // Load value decode happens here, one stage later than lsu.sv itself —
+  // dmem_rdata is synchronous-read, so the data for mem_wb_q's instruction
+  // (one stage behind whatever drove dmem_addr from ex_mem_q) is exactly
+  // what's arriving on dmem_rdata this same cycle. See load_align.sv.
+  xlen_t wb_mem_data;
+
+  load_align u_load_align (
+      .dmem_rdata (dmem_rdata),
+      .byte_off   (mem_wb_q.alu_result[1:0]),
+      .mem_size   (mem_wb_q.mem_size),
+      .mem_signext(mem_wb_q.mem_signext),
+      .is_amo     (mem_wb_q.is_amo),
+      .amo_op     (mem_wb_q.amo_op),
+      .sc_success (mem_wb_q.sc_success),
+      .rdata      (wb_mem_data)
+  );
+
   always_comb begin
-    if (mem_wb_q.wb_from_mem) wb_data = mem_wb_q.mem_rdata;
+    if (mem_wb_q.wb_from_mem) wb_data = wb_mem_data;
     else if (mem_wb_q.wb_from_pc4) wb_data = mem_wb_q.pc4;
     else if (mem_wb_q.wb_from_csr) wb_data = mem_wb_q.csr_rdata;
     else wb_data = mem_wb_q.alu_result;

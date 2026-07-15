@@ -2,22 +2,32 @@
 // rtl/core/lsu/lsu.sv
 // =============================================================================
 // Load/store unit: byte/halfword/word addressing on a 32-bit-wide,
-// word-addressed data memory port (combinational read, byte-strobed write,
-// same zero-wait-state assumption as the instruction memory port).
+// word-addressed data memory port. dmem_rdata is synchronous-read (one
+// cycle of latency after dmem_addr — the same timing a real FPGA Block RAM
+// presents); dmem_wstrb is a same-cycle synchronous write, applied at the
+// next clock edge, same as any ordinary synchronous RAM.
 //
-// Assumes naturally aligned accesses (no misaligned-access support/trap,
-// consistent with "no CSR / no exceptions yet" scope).
+// Load value decoding (byte/halfword extraction, sign-extension, SC's
+// success/fail code) is NOT done here — dmem_rdata for the address this
+// cycle's instruction just issued isn't valid yet. That's done one stage
+// later by rtl/core/lsu/load_align.sv, fed by mem_wb_q's carried control
+// bits + dmem_rdata once it has genuinely arrived; the natural MEM->WB
+// pipeline register gap is exactly the memory's read latency, so plain
+// loads need no stall at all.
 //
-// RV32A (LR.W/SC.W/AMO*.W): completed in a single cycle by exploiting the
-// same zero-wait-state model — dmem_rdata is a pure combinational read and
-// the memory write is a same-edge non-blocking assignment (see core_tb.sv),
-// so a combinational read and a same-edge write to the same address are
-// guaranteed to see the pre-write ("old") value on the read side. This is
-// exactly how the plain store path already works here; AMO just computes
-// dmem_wdata from dmem_rdata instead of from wdata_in directly. This is
-// fragile to the memory model: a real synchronous (1-cycle-latency) BRAM
-// would need a genuine multi-cycle MEM stage for AMO, analogous to
-// div_unit's stall.
+// RV32A (LR.W/SC.W/AMO*.W): LR.W is a plain load plus a reservation set (no
+// dependency on read timing). SC.W's success/failure and its write are
+// decided purely from the reservation state, never from reading memory, so
+// it also needs no extra cycle. AMO*.W (SWAP/ADD/XOR/AND/OR/MIN/MAX/MINU/
+// MAXU) is a genuine read-modify-write and is the one operation that can't
+// be single-cycle anymore once reads have latency: the old value needed to
+// compute the write isn't available until the cycle after the read is
+// issued. Handled as a 2-phase sequence (amo_phase_q) that asserts
+// amo_stall for exactly the read-issue cycle, holding ex_mem_q (via the new
+// stall port on ex_mem_reg) so the same address is still presented on the
+// write-issue cycle, once dmem_rdata holds the pre-write value. Structurally
+// the same idea as div_unit's multi-cycle stall, just living in MEM instead
+// of EX.
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -31,7 +41,6 @@ module lsu (
     input logic                mem_rd,
     input logic                mem_wr,
     input core_pkg::mem_size_e mem_size,
-    input logic                mem_signext,
 
     // RV32A
     input logic             is_amo,
@@ -44,11 +53,16 @@ module lsu (
     output logic             dmem_re,
     input  core_pkg::xlen_t dmem_rdata,
 
-    output core_pkg::xlen_t rdata,
-
     // Misalignment (feeds csr.sv's trap decision in the same MEM cycle)
     output logic load_misaligned,
-    output logic store_misaligned
+    output logic store_misaligned,
+
+    // RV32A: SC.W success/failure, known immediately (no dmem_rdata
+    // dependency) -- carried forward for load_align to produce SC's result.
+    output logic sc_success,
+
+    // RV32A: structural stall for AMO*.W's deferred read-modify-write.
+    output logic amo_stall
 );
 
   import core_pkg::*;
@@ -91,10 +105,9 @@ module lsu (
   logic  resv_valid_q;
   xlen_t resv_addr_q;
 
-  logic amo_rmw_write;  // AMO ops that unconditionally read-modify-write
-  assign amo_rmw_write = is_amo && (amo_op != AMO_LR) && (amo_op != AMO_SC);
+  logic amo_rmw_pending;  // AMO ops that unconditionally read-modify-write
+  assign amo_rmw_pending = is_amo && (amo_op != AMO_LR) && (amo_op != AMO_SC);
 
-  logic sc_success;
   assign sc_success = resv_valid_q && (resv_addr_q == dmem_addr);
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -106,10 +119,32 @@ module lsu (
       resv_addr_q  <= dmem_addr;
     end else if (is_amo && amo_op == AMO_SC) begin
       resv_valid_q <= 1'b0;
-    end else if (resv_valid_q && (mem_wr || amo_rmw_write) && (dmem_addr == resv_addr_q)) begin
+    end else if (resv_valid_q && (mem_wr || amo_rmw_pending) && (dmem_addr == resv_addr_q)) begin
       resv_valid_q <= 1'b0;
     end
   end
+
+  // -------------------------------------------------------------------------
+  // AMO*.W 2-phase read-modify-write.
+  // Phase 0 (amo_phase_q=0): address+read issued this cycle (same as any
+  // load); amo_stall=1 holds ex_mem_q (and everything upstream) so the same
+  // instruction — and hence the same dmem_addr — is still present next
+  // cycle. The write must not fire yet: dmem_rdata this cycle is stale
+  // (reflects whatever was addressed last cycle, not this AMO).
+  // Phase 1 (amo_phase_q=1): ex_mem_q held constant, so dmem_addr is
+  // unchanged; dmem_rdata now holds the genuine pre-write value for this
+  // address, so amo_alu's result is written this cycle. amo_stall
+  // deasserts, letting the pipeline advance normally starting next cycle.
+  // -------------------------------------------------------------------------
+  logic amo_phase_q;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) amo_phase_q <= 1'b0;
+    else if (amo_rmw_pending && !amo_phase_q) amo_phase_q <= 1'b1;
+    else amo_phase_q <= 1'b0;
+  end
+
+  assign amo_stall = amo_rmw_pending && !amo_phase_q;
 
   xlen_t amo_new_data;
 
@@ -137,9 +172,12 @@ module lsu (
             dmem_wdata = wdata_in;
             dmem_wstrb = sc_success ? 4'b1111 : 4'b0000;
           end
-          default: begin  // AMO*.W read-modify-write
-            dmem_wdata = amo_new_data;
-            dmem_wstrb = 4'b1111;
+          default: begin  // AMO*.W read-modify-write: only write on phase 1,
+                          // once dmem_rdata genuinely holds the old value.
+            if (amo_phase_q) begin
+              dmem_wdata = amo_new_data;
+              dmem_wstrb = 4'b1111;
+            end
           end
         endcase
       end else if (mem_wr) begin
@@ -158,36 +196,6 @@ module lsu (
           end
         endcase
       end
-    end
-  end
-
-  // -------------------------------------------------------------------------
-  // Read path: extract + sign/zero extend (AMO/LR/SC are always word-sized,
-  // so they fall out of the existing MSZ_W path with rdata = dmem_rdata,
-  // except SC which returns a success/fail code instead of a memory value).
-  // -------------------------------------------------------------------------
-  logic [ 7:0] rbyte;
-  logic [15:0] rhalf;
-
-  always_comb begin
-    unique case (byte_off)
-      2'b00:   rbyte = dmem_rdata[7:0];
-      2'b01:   rbyte = dmem_rdata[15:8];
-      2'b10:   rbyte = dmem_rdata[23:16];
-      2'b11:   rbyte = dmem_rdata[31:24];
-      default: rbyte = dmem_rdata[7:0];
-    endcase
-
-    rhalf = byte_off[1] ? dmem_rdata[31:16] : dmem_rdata[15:0];
-
-    if (is_amo && amo_op == AMO_SC) begin
-      rdata = sc_success ? xlen_t'(32'd0) : xlen_t'(32'd1);
-    end else begin
-      unique case (mem_size)
-        MSZ_B: rdata = mem_signext ? xlen_t'({{24{rbyte[7]}}, rbyte}) : xlen_t'({24'b0, rbyte});
-        MSZ_H: rdata = mem_signext ? xlen_t'({{16{rhalf[15]}}, rhalf}) : xlen_t'({16'b0, rhalf});
-        default: rdata = dmem_rdata;  // MSZ_W (also covers LR/AMO-RMW: old value)
-      endcase
     end
   end
 
