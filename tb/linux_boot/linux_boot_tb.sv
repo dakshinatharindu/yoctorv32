@@ -175,13 +175,6 @@ module linux_boot_tb;
         $display("linux_boot_tb: cyc=%0d imem_addr=%08h dmem_addr=%08h uart_bytes=%0d", cyc,
                   imem_addr, dmem_addr, uart_byte_count);
       end
-      if (|dmem_wstrb && dmem_addr >= 32'h1000_0000 && dmem_addr < 32'h1000_0020) begin
-        $display("linux_boot_tb: cyc=%0d UART WRITE addr=%08h wdata=%08h wstrb=%b", cyc, dmem_addr,
-                  dmem_wdata, dmem_wstrb);
-      end
-      if (dmem_re && dmem_addr >= 32'h1000_0000 && dmem_addr < 32'h1000_0020) begin
-        $display("linux_boot_tb: cyc=%0d UART READ  addr=%08h", cyc, dmem_addr);
-      end
     end
 
     $display("\nlinux_boot_tb: stopped after %0d cycles (%0d uart bytes decoded)", cyc,

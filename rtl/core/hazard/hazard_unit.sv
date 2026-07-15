@@ -77,7 +77,22 @@ module hazard_unit (
   assign if_id_stall = load_use_hazard || ex_div_stall || amo_stall;
 
   assign if_id_flush = branch_taken || sys_redirect;
-  assign id_ex_flush = load_use_hazard || branch_taken || sys_redirect;
+
+  // load_use_hazard is gated on !ex_div_stall/!amo_stall: id_ex_q can be
+  // BOTH a load-use hazard's producer (its own rd matches if_id's rs1/rs2)
+  // AND the instruction a structural stall is holding in place there at the
+  // same time (e.g. a load sitting behind an AMO's deferred write-back
+  // cycle) — id_ex_reg gives flush priority over stall, so without this
+  // gate the flush would win and zero out id_ex_q, silently discarding the
+  // very instruction amo_stall/ex_div_stall was trying to preserve. Found
+  // via a real Linux boot: an AMO immediately followed by a load whose
+  // result fed another load one instruction later lost the first load
+  // entirely. Once the structural stall clears, id_ex_q's content is
+  // whatever amo_stall/ex_div_stall was holding — load_use_hazard gets
+  // re-evaluated fresh against it next cycle, so nothing is skipped, just
+  // deferred until it's safe to flush.
+  assign id_ex_flush = (load_use_hazard && !ex_div_stall && !amo_stall) || branch_taken ||
+      sys_redirect;
 
   // Not OR'd with load_use_hazard: load-use needs id_ex_q to advance to a
   // bubble while the load proceeds into EX; div-stall/amo-stall need id_ex_q
