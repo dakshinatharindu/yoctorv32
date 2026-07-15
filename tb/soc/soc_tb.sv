@@ -2,11 +2,19 @@
 // tb/soc/soc_tb.sv
 // =============================================================================
 // SoC-level self-checking testbench for soc_top (core_top + data_bus +
-// clint). Mirrors tb/core/core_tb.sv exactly (same synchronous RAM model,
-// same +HEXFILE/+MAX_CYCLES/+TOHOST_ADDR plusarg conventions, same tohost
-// snoop), except it instantiates soc_top instead of core_top directly, so
-// CLINT is reachable at its real mapped address (0x1100_0000) through the
-// actual interconnect rather than being tested in isolation.
+// clint + uart). Mirrors tb/core/core_tb.sv exactly (same synchronous RAM
+// model, same +HEXFILE/+MAX_CYCLES/+TOHOST_ADDR plusarg conventions, same
+// tohost snoop), except it instantiates soc_top instead of core_top
+// directly, so CLINT/UART are reachable at their real mapped addresses
+// through the actual interconnect rather than being tested in isolation.
+//
+// A uart_rx_monitor independently decodes the bit-accurate uart_tx
+// waveform (blind to the UART peripheral's internal registers) and
+// $displays every received byte at test completion — a second, hardware-
+// level confirmation alongside whatever the test program itself verified
+// from the register/software side. BIT_PERIOD_CYCLES must match whatever
+// divisor the UART test program under test actually configures (currently
+// all such tests use divisor=1, i.e. 16 cycles/bit).
 //
 // Usage: +HEXFILE=path/to/prog.vh [+MAX_CYCLES=100000] [+TOHOST_ADDR=1000]
 // =============================================================================
@@ -32,6 +40,7 @@ module soc_tb;
   xlen_t dmem_addr, dmem_wdata, dmem_rdata;
   logic [3:0] dmem_wstrb;
   logic dmem_re;
+  logic uart_tx;
 
   soc_top dut (
       .clk       (clk),
@@ -42,7 +51,23 @@ module soc_tb;
       .dmem_wdata(dmem_wdata),
       .dmem_wstrb(dmem_wstrb),
       .dmem_re   (dmem_re),
-      .dmem_rdata(dmem_rdata)
+      .dmem_rdata(dmem_rdata),
+      .uart_tx   (uart_tx)
+  );
+
+  localparam int UartMaxBytes = 64;
+  logic [7:0] uart_bytes[UartMaxBytes];
+  int unsigned uart_byte_count;
+
+  uart_rx_monitor #(
+      .BIT_PERIOD_CYCLES(16),
+      .MAX_BYTES(UartMaxBytes)
+  ) u_uart_monitor (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .tx        (uart_tx),
+      .bytes_q   (uart_bytes),
+      .byte_count(uart_byte_count)
   );
 
   // Synchronous reads (registered output), matching real BRAM: data for the
@@ -102,6 +127,14 @@ module soc_tb;
     while (!test_done && cyc < max_cycles) begin
       @(posedge clk);
       cyc++;
+    end
+
+    if (uart_byte_count > 0) begin
+      $write("soc_tb: uart_tx decoded %0d byte(s): ", uart_byte_count);
+      for (int i = 0; i < uart_byte_count; i++) begin
+        $write("%02h('%c') ", uart_bytes[i], uart_bytes[i]);
+      end
+      $write("\n");
     end
 
     if (!test_done) begin

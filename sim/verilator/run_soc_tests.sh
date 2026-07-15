@@ -47,6 +47,7 @@ verilator --binary --timing -Wno-fatal \
     -Mdir "$BUILD_DIR" \
     --top-module soc_tb \
     "${RTL_FILES[@]}" \
+    tb/soc/uart_rx_monitor.sv \
     tb/soc/soc_tb.sv
 
 BIN="$BUILD_DIR/Vsoc_tb"
