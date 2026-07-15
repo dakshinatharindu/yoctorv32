@@ -382,7 +382,7 @@ module core_top (
       .mtip                (mtip),
       .meip                (meip),
       .instr_valid         (ex_mem_q.valid),
-      .amo_stall           (amo_stall),
+      .is_amo              (ex_mem_q.is_amo),
       .csr_rdata           (csr_rdata_w),
       .trap_taken          (trap_taken),
       .sys_redirect        (sys_redirect),

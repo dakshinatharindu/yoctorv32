@@ -59,7 +59,7 @@ module csr (
     input logic                mtip,         // from CLINT, live (not registered)
     input logic                meip,         // from PLIC, live (not registered)
     input logic                instr_valid,  // ex_mem_q.valid: a real instruction is retiring
-    input logic                amo_stall,    // AMO*.W mid-RMW: never preempt this cycle
+    input logic                is_amo,       // ex_mem_q.is_amo: LR.W/SC.W/AMO*.W, see take_interrupt below
 
     // Outputs
     output core_pkg::xlen_t  csr_rdata,  // old value, for rd writeback
@@ -186,11 +186,30 @@ module csr (
   // Interrupt-taken: reuses the exact same trap-entry machinery below
   // (mepc<=pc, mcause, mstatus save-restore, sys_redirect to mtvec) as a
   // synchronous exception — it's just a different way to set trap_cause.
-  // Gated on instr_valid && !amo_stall so an interrupt only ever preempts a
-  // genuine, fully-retiring instruction (never a bubble, never mid-way
-  // through an AMO*.W's 2-phase read-modify-write). Already mutually
-  // exclusive with the synchronous causes below (trap_taken_sync), so no
-  // separate priority encoder is needed between them.
+  // Gated on instr_valid && !is_amo so an interrupt only ever preempts a
+  // genuine, fully-retiring, non-AMO instruction (never a bubble, and
+  // never any LR.W/SC.W/AMO*.W). This has to cover ALL of RV32A, not just
+  // the read-modify-write AMOs that need lsu.sv's 2-phase amo_stall:
+  // whichever of LR.W/SC.W/AMO*.W is in ex_mem_q this cycle has already
+  // committed its side effect (reservation set, memory write, or
+  // reservation clear) combinationally this same cycle, regardless of
+  // what ex_mem_flush does to ex_mem_q next cycle. Taking an interrupt
+  // anyway would set mepc to this instruction's own PC, and mret would
+  // replay it -- for AMO*.W that means executing the read-modify-write a
+  // second time (double-corrupting whatever counter it updates); for a
+  // SUCCESSFUL SC.W it means the replay spuriously fails (the reservation
+  // the first, real success already consumed is gone), so the calling
+  // software never learns its store actually landed and treats an
+  // already-acquired lock as still contended forever. Found via a real Linux
+  // boot: a timer interrupt landing on a successful SC.W's own retire
+  // cycle (inside down_write()'s fast-path cmpxchg) replayed it into a
+  // spurious failure, sending a already-satisfied lock acquisition into
+  // rwsem's slow path to sleep for a wakeup nobody would ever send —
+  // system-wide deadlock. Blocking on the full is_amo (not just amo_stall,
+  // which is phase-0-only and doesn't even cover LR.W/SC.W at all) closes
+  // this for every RV32A instruction uniformly. Already mutually exclusive
+  // with the synchronous causes below (trap_taken_sync), so no separate
+  // priority encoder is needed between them.
   // ---------------------------------------------------------------------
   logic trap_taken_sync;
   assign trap_taken_sync = illegal_instr_final || is_ecall || is_ebreak ||
@@ -201,7 +220,7 @@ module csr (
   assign mei_pending      = meip && mie_q[11];
   assign mti_pending      = mtip && mie_q[7];
   assign interrupt_pending = mstatus_mie_q && (mei_pending || mti_pending);
-  assign take_interrupt = instr_valid && !amo_stall && !trap_taken_sync && interrupt_pending;
+  assign take_interrupt = instr_valid && !is_amo && !trap_taken_sync && interrupt_pending;
 
   // ---------------------------------------------------------------------
   // Trap cause selection (mutually exclusive by instruction category — see
