@@ -12,14 +12,15 @@
 // exclusive per instruction — no cross-category priority encoder is needed,
 // just an OR.
 //
-// Timer interrupt (MTIP, from an external CLINT) is wired up: mip is a
-// read-only value derived from live hardware state (mtip; the software/
-// external bits are tied to 0 until PLIC/inter-hart IPI support exists),
-// and an interrupt is taken by reusing the exact same trap-entry machinery
-// as a synchronous exception (mepc/mcause/mstatus save-restore, sys_redirect
-// to mtvec) — it just gets a new way to trigger, checked only when a valid,
-// non-stalled instruction is retiring this cycle (so an interrupt never
-// preempts mid-flight AMO read-modify-write or a pipeline bubble). mie
+// Timer (MTIP, from CLINT) and external (MEIP, from an external PLIC)
+// interrupts are both wired up: mip is a read-only value derived from live
+// hardware state (software bit tied to 0 — single hart has no inter-hart
+// IPI use for it). An interrupt is taken by reusing the exact same
+// trap-entry machinery as a synchronous exception (mepc/mcause/mstatus
+// save-restore, sys_redirect to mtvec) — it just gets a new way to
+// trigger, checked only when a valid, non-stalled instruction is retiring
+// this cycle (so an interrupt never preempts mid-flight AMO
+// read-modify-write or a pipeline bubble), with priority MEI > MTI. mie
 // stays fully read/write software storage (masks which enabled sources can
 // interrupt).
 //
@@ -56,6 +57,7 @@ module csr (
 
     // Interrupt sources / gating
     input logic                mtip,         // from CLINT, live (not registered)
+    input logic                meip,         // from PLIC, live (not registered)
     input logic                instr_valid,  // ex_mem_q.valid: a real instruction is retiring
     input logic                amo_stall,    // AMO*.W mid-RMW: never preempt this cycle
 
@@ -110,12 +112,12 @@ module csr (
   assign mstatus_rdata = {19'b0, 2'b11, 3'b0, mstatus_mpie_q, 3'b0, mstatus_mie_q, 3'b0};
 
   // mip is read-only, derived live from hardware interrupt sources — never
-  // software-writable (a real hart only ever lets software clear MTIP
-  // indirectly, by reprogramming mtimecmp on the CLINT). bit3=MSIP,
-  // bit7=MTIP, bit11=MEIP; MSIP/MEIP tied to 0 until inter-hart IPI/PLIC
-  // support exists.
+  // software-writable (a real hart only ever lets software clear MTIP/MEIP
+  // indirectly, by servicing the CLINT/PLIC directly). bit3=MSIP, bit7=
+  // MTIP, bit11=MEIP; MSIP tied to 0 (single hart has no inter-hart IPI
+  // use for software interrupts).
   xlen_t mip_rdata;
-  assign mip_rdata = {20'b0, 1'b0, 3'b0, mtip, 3'b0, 1'b0, 3'b0};
+  assign mip_rdata = {20'b0, meip, 3'b0, mtip, 3'b0, 1'b0, 3'b0};
 
   // ---------------------------------------------------------------------
   // Address decode / read
@@ -194,8 +196,11 @@ module csr (
   assign trap_taken_sync = illegal_instr_final || is_ecall || is_ebreak ||
       store_misaligned || load_misaligned;
 
-  logic interrupt_pending, take_interrupt;
-  assign interrupt_pending = mstatus_mie_q && mtip && mie_q[7];
+  // Priority MEI > MTI (MSI unimplemented — see mip_rdata comment above).
+  logic mei_pending, mti_pending, interrupt_pending, take_interrupt;
+  assign mei_pending      = meip && mie_q[11];
+  assign mti_pending      = mtip && mie_q[7];
+  assign interrupt_pending = mstatus_mie_q && (mei_pending || mti_pending);
   assign take_interrupt = instr_valid && !amo_stall && !trap_taken_sync && interrupt_pending;
 
   // ---------------------------------------------------------------------
@@ -208,7 +213,7 @@ module csr (
     trap_cause = '0;
     trap_val   = '0;
     if (take_interrupt) begin
-      trap_cause = CAUSE_M_TIMER_INT;
+      trap_cause = mei_pending ? CAUSE_M_EXTERNAL_INT : CAUSE_M_TIMER_INT;
     end else if (illegal_instr_final) begin
       trap_cause = CAUSE_ILLEGAL_INSTR;
     end else if (is_ecall) begin

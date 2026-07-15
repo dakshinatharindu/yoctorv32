@@ -1,0 +1,79 @@
+/dts-v1/;
+
+/ {
+	#address-cells = <0x02>;
+	#size-cells = <0x02>;
+	compatible = "riscv-minimal-nommu";
+	model = "yoctorv32,soc";
+
+	chosen {
+		bootargs = "earlycon console=ttyS0,1000000";
+		stdout-path = "/soc/uart@10000000:1000000";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x00 0x80000000 0x00 0x4000000>;
+	};
+
+	cpus {
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		timebase-frequency = <0xf4240>;
+
+		cpu@0 {
+			phandle = <0x01>;
+			device_type = "cpu";
+			reg = <0x00>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv32ima";
+			mmu-type = "riscv,none";
+
+			interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x02>;
+			};
+		};
+
+		cpu-map {
+			cluster0 {
+				core0 {
+					cpu = <0x01>;
+				};
+			};
+		};
+	};
+
+	soc {
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		compatible = "simple-bus";
+		ranges;
+
+		// reg-shift=2: our uart.sv is word-spaced (each register its own
+		// 32-bit word), not the real 16550's byte-packed layout — see
+		// rtl/peripherals/uart.sv's header for why. No interrupt-parent/
+		// interrupts: we have no PLIC yet, so this must present as
+		// polling-only (the in-tree 8250 driver falls back to polling
+		// when a UART node has no interrupts property).
+		uart@10000000 {
+			clock-frequency = <0x1000000>;
+			reg = <0x00 0x10000000 0x00 0x100>;
+			reg-shift = <0x02>;
+			reg-io-width = <0x04>;
+			compatible = "ns16550a";
+		};
+
+		// interrupts-extended targets the CPU's own local
+		// interrupt-controller (MTIP/MSIP), not a PLIC — matches
+		// rtl/peripherals/clint.sv as built, unmodified.
+		clint@11000000 {
+			interrupts-extended = <0x02 0x03 0x02 0x07>;
+			reg = <0x00 0x11000000 0x00 0x10000>;
+			compatible = "sifive,clint0\0riscv,clint0";
+		};
+	};
+};

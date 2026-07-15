@@ -1,14 +1,14 @@
 // =============================================================================
 // rtl/interconnect/data_bus.sv
 // =============================================================================
-// Minimal 3-way address-range decoder/mux for the CPU's data-memory port,
-// routing between external RAM, the CLINT peripheral, and the UART
-// peripheral. All targets are synchronous-read (1-cycle latency, matching
-// core_top's existing dmem assumption), so the decode itself adds no extra
-// latency — only the returning read-data mux needs a registered select,
-// since the data for the address issued this cycle only arrives next
-// cycle, by which point the CPU may already be driving a different
-// address.
+// Minimal 4-way address-range decoder/mux for the CPU's data-memory port,
+// routing between external RAM, the CLINT peripheral, the UART
+// peripheral, and the PLIC. All targets are synchronous-read (1-cycle
+// latency, matching core_top's existing dmem assumption), so the decode
+// itself adds no extra latency — only the returning read-data mux needs a
+// registered select, since the data for the address issued this cycle
+// only arrives next cycle, by which point the CPU may already be driving
+// a different address.
 //
 // core_top's addr/wdata/wstrb passthrough to whichever target is selected;
 // the other targets see re/wstrb held low that cycle so they neither read
@@ -21,7 +21,9 @@ module data_bus #(
     parameter core_pkg::xlen_t CLINT_BASE = 32'h1100_0000,
     parameter core_pkg::xlen_t CLINT_SIZE = 32'h0001_0000,
     parameter core_pkg::xlen_t UART_BASE  = 32'h1000_0000,
-    parameter core_pkg::xlen_t UART_SIZE  = 32'h0000_0100
+    parameter core_pkg::xlen_t UART_SIZE  = 32'h0000_0100,
+    parameter core_pkg::xlen_t PLIC_BASE  = 32'h0C00_0000,
+    parameter core_pkg::xlen_t PLIC_SIZE  = 32'h0400_0000
 ) (
     input logic clk,
     input logic rst_n,
@@ -52,19 +54,27 @@ module data_bus #(
     output core_pkg::xlen_t uart_wdata,
     output logic      [3:0] uart_wstrb,
     output logic             uart_re,
-    input  core_pkg::xlen_t uart_rdata
+    input  core_pkg::xlen_t uart_rdata,
+
+    // PLIC side
+    output core_pkg::xlen_t plic_addr,
+    output core_pkg::xlen_t plic_wdata,
+    output logic      [3:0] plic_wstrb,
+    output logic             plic_re,
+    input  core_pkg::xlen_t plic_rdata
 );
 
   import core_pkg::*;
 
-  logic is_clint, is_uart;
+  logic is_clint, is_uart, is_plic;
   assign is_clint = (cpu_addr >= CLINT_BASE) && (cpu_addr < (CLINT_BASE + CLINT_SIZE));
   assign is_uart  = (cpu_addr >= UART_BASE) && (cpu_addr < (UART_BASE + UART_SIZE));
+  assign is_plic  = (cpu_addr >= PLIC_BASE) && (cpu_addr < (PLIC_BASE + PLIC_SIZE));
 
   assign ram_addr  = cpu_addr;
   assign ram_wdata = cpu_wdata;
-  assign ram_wstrb = (is_clint || is_uart) ? 4'b0000 : cpu_wstrb;
-  assign ram_re    = cpu_re && !is_clint && !is_uart;
+  assign ram_wstrb = (is_clint || is_uart || is_plic) ? 4'b0000 : cpu_wstrb;
+  assign ram_re    = cpu_re && !is_clint && !is_uart && !is_plic;
 
   assign clint_addr  = cpu_addr;
   assign clint_wdata = cpu_wdata;
@@ -76,13 +86,19 @@ module data_bus #(
   assign uart_wstrb = is_uart ? cpu_wstrb : 4'b0000;
   assign uart_re    = cpu_re && is_uart;
 
+  assign plic_addr  = cpu_addr;
+  assign plic_wdata = cpu_wdata;
+  assign plic_wstrb = is_plic ? cpu_wstrb : 4'b0000;
+  assign plic_re    = cpu_re && is_plic;
+
   // Registered select: the read data for this cycle's address decision
   // arrives next cycle, so the mux needs the decision delayed by exactly
   // that same one cycle.
-  typedef enum logic [1:0] {
+  typedef enum logic [2:0] {
     SEL_RAM,
     SEL_CLINT,
-    SEL_UART
+    SEL_UART,
+    SEL_PLIC
   } sel_e;
 
   sel_e sel_q;
@@ -90,6 +106,7 @@ module data_bus #(
     if (!rst_n) sel_q <= SEL_RAM;
     else if (is_clint) sel_q <= SEL_CLINT;
     else if (is_uart) sel_q <= SEL_UART;
+    else if (is_plic) sel_q <= SEL_PLIC;
     else sel_q <= SEL_RAM;
   end
 
@@ -97,6 +114,7 @@ module data_bus #(
     unique case (sel_q)
       SEL_CLINT: cpu_rdata = clint_rdata;
       SEL_UART:  cpu_rdata = uart_rdata;
+      SEL_PLIC:  cpu_rdata = plic_rdata;
       default:   cpu_rdata = ram_rdata;
     endcase
   end

@@ -3,8 +3,10 @@ work
 transcript
 sim/verilator/obj_dir
 sim/verilator/obj_dir_soc
+sim/verilator/obj_dir_linux_boot
 sim/verilator/progs
 sim/verilator/soc_progs
+sim/verilator/linux_boot_out
 sim/verilator/riscv-tests-progs
 sim/icarus/obj_dir
 sim/icarus/progs

@@ -2,11 +2,11 @@
 // rtl/top/soc_top.sv
 // =============================================================================
 // SoC-level wrapper: core_top (pure CPU) + data_bus (interconnect) + clint
-// + uart (peripherals). core_top itself stays untouched/CPU-only — this is
-// the module a future FPGA top or Linux-boot testbench instantiates
-// instead of core_top directly. Instructions never execute from CLINT/
-// UART, so imem is wired straight to external RAM with no decode; only the
-// data-memory port needs routing between RAM/CLINT/UART.
+// + uart + plic (peripherals). core_top itself stays untouched/CPU-only —
+// this is the module a future FPGA top or Linux-boot testbench
+// instantiates instead of core_top directly. Instructions never execute
+// from CLINT/UART/PLIC, so imem is wired straight to external RAM with no
+// decode; only the data-memory port needs routing.
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -26,9 +26,9 @@ module soc_top (
     output logic             dmem_re,
     input  core_pkg::xlen_t dmem_rdata,
 
-    // UART serial output (RX not wired yet — no receive logic exists until
-    // the interrupt-driven-console follow-up).
-    output logic uart_tx
+    // UART serial lines.
+    output logic uart_tx,
+    input  logic uart_rx
 );
 
   import core_pkg::*;
@@ -45,6 +45,12 @@ module soc_top (
   xlen_t uart_addr, uart_wdata, uart_rdata;
   logic  [3:0] uart_wstrb;
   logic  uart_re;
+  logic  uart_irq;
+
+  xlen_t plic_addr, plic_wdata, plic_rdata;
+  logic  [3:0] plic_wstrb;
+  logic  plic_re;
+  logic  meip;
 
   core_top u_core_top (
       .clk       (clk),
@@ -56,7 +62,8 @@ module soc_top (
       .dmem_wstrb(cpu_dmem_wstrb),
       .dmem_re   (cpu_dmem_re),
       .dmem_rdata(cpu_dmem_rdata),
-      .mtip      (mtip)
+      .mtip      (mtip),
+      .meip      (meip)
   );
 
   data_bus u_data_bus (
@@ -81,7 +88,12 @@ module soc_top (
       .uart_wdata (uart_wdata),
       .uart_wstrb (uart_wstrb),
       .uart_re    (uart_re),
-      .uart_rdata (uart_rdata)
+      .uart_rdata (uart_rdata),
+      .plic_addr  (plic_addr),
+      .plic_wdata (plic_wdata),
+      .plic_wstrb (plic_wstrb),
+      .plic_re    (plic_re),
+      .plic_rdata (plic_rdata)
   );
 
   clint u_clint (
@@ -103,7 +115,21 @@ module soc_top (
       .wstrb(uart_wstrb),
       .re   (uart_re),
       .rdata(uart_rdata),
-      .tx   (uart_tx)
+      .tx   (uart_tx),
+      .rx   (uart_rx),
+      .irq  (uart_irq)
+  );
+
+  plic u_plic (
+      .clk    (clk),
+      .rst_n  (rst_n),
+      .addr   (plic_addr),
+      .wdata  (plic_wdata),
+      .wstrb  (plic_wstrb),
+      .re     (plic_re),
+      .rdata  (plic_rdata),
+      .source1(uart_irq),
+      .meip   (meip)
   );
 
 endmodule

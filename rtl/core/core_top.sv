@@ -5,7 +5,8 @@
 // yoctorv32 core: classic 5-stage in-order RV32I pipeline (IF/ID/EX/MEM/WB).
 // - Bare-minimal M-mode-only CSR/trap machinery: ECALL/EBREAK/illegal
 //   instruction/misaligned load-store traps, MRET, CSRRW/S/C/WI/SI/CI, plus
-//   a timer interrupt (mtip input, from an external CLINT peripheral).
+//   a timer interrupt (mtip, from an external CLINT) and an external
+//   interrupt (meip, from an external PLIC).
 // - Instruction and data memories are external, synchronous-read (1-cycle
 //   latency, matching real FPGA Block RAM) — see imem_*/dmem_* ports. Fetch
 //   absorbs this into the pipeline with no stall (ifetch.sv); loads/stores
@@ -34,7 +35,10 @@ module core_top (
     input  core_pkg::xlen_t dmem_rdata,
 
     // Timer interrupt line, from an external CLINT peripheral.
-    input logic mtip
+    input logic mtip,
+
+    // External interrupt line, from an external PLIC peripheral.
+    input logic meip
 );
 
   import core_pkg::*;
@@ -376,6 +380,7 @@ module core_top (
       .store_misaligned    (store_misaligned),
       .mem_addr            (ex_mem_q.alu_result),
       .mtip                (mtip),
+      .meip                (meip),
       .instr_valid         (ex_mem_q.valid),
       .amo_stall           (amo_stall),
       .csr_rdata           (csr_rdata_w),
