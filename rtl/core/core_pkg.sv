@@ -23,14 +23,21 @@ package core_pkg;
   localparam logic [31:0] NOP_INSTR = 32'h0000_0013;
 
   // ---------------------------------------------------------------------------
-  // Trap causes (mcause values; exceptions only this pass — the interrupt bit
-  // is never set since no interrupt source is wired up yet).
+  // Trap causes (mcause values).
   // ---------------------------------------------------------------------------
   localparam logic [31:0] CAUSE_ILLEGAL_INSTR = 32'd2;
   localparam logic [31:0] CAUSE_BREAKPOINT = 32'd3;
   localparam logic [31:0] CAUSE_LOAD_MISALIGNED = 32'd4;
   localparam logic [31:0] CAUSE_STORE_MISALIGNED = 32'd6;
   localparam logic [31:0] CAUSE_ECALL_M = 32'd11;
+
+  // Interrupts (mcause bit 31 set). Software/external listed for encoding
+  // completeness; only the timer cause is actually driven this pass (single
+  // hart has no use for inter-hart software interrupts, and external/PLIC
+  // routing is a later phase).
+  localparam logic [31:0] CAUSE_M_SOFTWARE_INT = 32'h8000_0003;
+  localparam logic [31:0] CAUSE_M_TIMER_INT = 32'h8000_0007;
+  localparam logic [31:0] CAUSE_M_EXTERNAL_INT = 32'h8000_000B;
 
   // CSR opcode encoding — matches funct3[1:0] directly, so decode can cast
   // funct3 straight into this enum with no separate lookup.

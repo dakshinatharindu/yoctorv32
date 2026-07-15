@@ -1,31 +1,19 @@
 // =============================================================================
-// tb/core/core_tb.sv
+// tb/soc/soc_tb.sv
 // =============================================================================
-// Core-level self-checking testbench for core_top.
-//
-// Loads a compiled directed test program (Verilog-hex, as produced by
-// `objcopy -O verilog`) into a flat byte-addressable memory shared by the
-// imem/dmem ports, runs the core, and watches for a store to TOHOST_ADDR
-// (see tb/core/common/test_macros.h):
-//   value == 1           -> PASS
-//   value == (code<<1)|1 -> FAIL, reported with `code`
-// A cycle watchdog reports TIMEOUT if the program never reaches tohost
-// (e.g. the core hangs on a hazard bug instead of parking cleanly).
-//
-// imem/dmem reads are synchronous (registered), matching real FPGA Block
-// RAM timing (data arrives one cycle after the address) — the same
-// standard read-first BRAM-inference template Vivado/Quartus recognize, so
-// this model is representative of what the core will see with real BRAM.
+// SoC-level self-checking testbench for soc_top (core_top + data_bus +
+// clint). Mirrors tb/core/core_tb.sv exactly (same synchronous RAM model,
+// same +HEXFILE/+MAX_CYCLES/+TOHOST_ADDR plusarg conventions, same tohost
+// snoop), except it instantiates soc_top instead of core_top directly, so
+// CLINT is reachable at its real mapped address (0x1100_0000) through the
+// actual interconnect rather than being tested in isolation.
 //
 // Usage: +HEXFILE=path/to/prog.vh [+MAX_CYCLES=100000] [+TOHOST_ADDR=1000]
-// TOHOST_ADDR defaults to 0x1000 (matching tb/core/common/test_macros.h);
-// override it for test suites whose linker script places tohost elsewhere
-// (e.g. sim/verilator/run_riscv_tests.sh passes +TOHOST_ADDR=3000).
 // =============================================================================
 
 `timescale 1ns / 1ps
 
-module core_tb;
+module soc_tb;
 
   import core_pkg::*;
 
@@ -45,7 +33,7 @@ module core_tb;
   logic [3:0] dmem_wstrb;
   logic dmem_re;
 
-  core_top dut (
+  soc_top dut (
       .clk       (clk),
       .rst_n     (rst_n),
       .imem_addr (imem_addr),
@@ -54,12 +42,12 @@ module core_tb;
       .dmem_wdata(dmem_wdata),
       .dmem_wstrb(dmem_wstrb),
       .dmem_re   (dmem_re),
-      .dmem_rdata(dmem_rdata),
-      .mtip      (1'b0)  // no CLINT at this test level; core-only directed tests
+      .dmem_rdata(dmem_rdata)
   );
 
   // Synchronous reads (registered output), matching real BRAM: data for the
   // address driven this cycle arrives on imem_rdata/dmem_rdata next cycle.
+  // RAM only ever sees addresses the interconnect has decoded as non-CLINT.
   always_ff @(posedge clk) begin
     imem_rdata <= {mem[imem_addr+3], mem[imem_addr+2], mem[imem_addr+1], mem[imem_addr+0]};
     dmem_rdata <= {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr+0]};
@@ -94,7 +82,7 @@ module core_tb;
     for (int i = 0; i < MEM_BYTES; i++) mem[i] = 8'h00;
 
     if (!$value$plusargs("HEXFILE=%s", hexfile)) begin
-      $fatal(1, "core_tb: missing +HEXFILE=<path> plusarg");
+      $fatal(1, "soc_tb: missing +HEXFILE=<path> plusarg");
     end
     $readmemh(hexfile, mem);
 
@@ -106,7 +94,7 @@ module core_tb;
       tohost_addr = TOHOST_ADDR_DEFAULT;
     end
 
-    $display("core_tb: loaded %s", hexfile);
+    $display("soc_tb: loaded %s", hexfile);
 
     repeat (3) @(posedge clk);
     rst_n = 1'b1;
@@ -117,21 +105,21 @@ module core_tb;
     end
 
     if (!test_done) begin
-      $display("core_tb: TIMEOUT after %0d cycles (%s)", cyc, hexfile);
+      $display("soc_tb: TIMEOUT after %0d cycles (%s)", cyc, hexfile);
       $fatal(1, "TIMEOUT");
     end else if (test_result == 32'h1) begin
-      $display("core_tb: PASS after %0d cycles (%s)", cyc, hexfile);
+      $display("soc_tb: PASS after %0d cycles (%s)", cyc, hexfile);
       $finish;
     end else begin
-      $display("core_tb: FAIL result=0x%08h after %0d cycles (%s)", test_result, cyc, hexfile);
+      $display("soc_tb: FAIL result=0x%08h after %0d cycles (%s)", test_result, cyc, hexfile);
       $fatal(1, "FAIL");
     end
   end
 
   initial begin
     if ($test$plusargs("VCD")) begin
-      $dumpfile("core_tb.vcd");
-      $dumpvars(0, core_tb);
+      $dumpfile("soc_tb.vcd");
+      $dumpvars(0, soc_tb);
     end
   end
 

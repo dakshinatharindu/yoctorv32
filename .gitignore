@@ -2,7 +2,9 @@ work
 .nvim/svlangserver
 transcript
 sim/verilator/obj_dir
+sim/verilator/obj_dir_soc
 sim/verilator/progs
+sim/verilator/soc_progs
 sim/verilator/riscv-tests-progs
 sim/icarus/obj_dir
 sim/icarus/progs

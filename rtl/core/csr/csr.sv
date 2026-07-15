@@ -12,10 +12,16 @@
 // exclusive per instruction — no cross-category priority encoder is needed,
 // just an OR.
 //
-// No interrupt source is wired up yet: mie/mip are plain read/write storage
-// with no hardware consumer. mstatus.MIE/MPIE save-restore is implemented
-// now (required for MRET round-trip correctness) even though MIE has no
-// effect yet — this is the natural hook point for a future interrupt pass.
+// Timer interrupt (MTIP, from an external CLINT) is wired up: mip is a
+// read-only value derived from live hardware state (mtip; the software/
+// external bits are tied to 0 until PLIC/inter-hart IPI support exists),
+// and an interrupt is taken by reusing the exact same trap-entry machinery
+// as a synchronous exception (mepc/mcause/mstatus save-restore, sys_redirect
+// to mtvec) — it just gets a new way to trigger, checked only when a valid,
+// non-stalled instruction is retiring this cycle (so an interrupt never
+// preempts mid-flight AMO read-modify-write or a pipeline bubble). mie
+// stays fully read/write software storage (masks which enabled sources can
+// interrupt).
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -39,6 +45,11 @@ module csr (
     input logic                load_misaligned,
     input logic                store_misaligned,
     input core_pkg::xlen_t    mem_addr,  // = ex_mem_q.alu_result, for mtval
+
+    // Interrupt sources / gating
+    input logic                mtip,         // from CLINT, live (not registered)
+    input logic                instr_valid,  // ex_mem_q.valid: a real instruction is retiring
+    input logic                amo_stall,    // AMO*.W mid-RMW: never preempt this cycle
 
     // Outputs
     output core_pkg::xlen_t  csr_rdata,  // old value, for rd writeback
@@ -73,7 +84,7 @@ module csr (
   // State
   // ---------------------------------------------------------------------
   logic  mstatus_mie_q, mstatus_mpie_q;
-  xlen_t mie_q, mip_q;
+  xlen_t mie_q;
   xlen_t mtvec_q, mscratch_q, mepc_q, mcause_q, mtval_q;
 
   xlen_t mstatus_rdata;
@@ -81,6 +92,14 @@ module csr (
   // no S/U mode ever entered), all other bits 0.
   // [31:13]=0(19) [12:11]=MPP(2) [10:8]=0(3) [7]=MPIE(1) [6:4]=0(3) [3]=MIE(1) [2:0]=0(3)
   assign mstatus_rdata = {19'b0, 2'b11, 3'b0, mstatus_mpie_q, 3'b0, mstatus_mie_q, 3'b0};
+
+  // mip is read-only, derived live from hardware interrupt sources — never
+  // software-writable (a real hart only ever lets software clear MTIP
+  // indirectly, by reprogramming mtimecmp on the CLINT). bit3=MSIP,
+  // bit7=MTIP, bit11=MEIP; MSIP/MEIP tied to 0 until inter-hart IPI/PLIC
+  // support exists.
+  xlen_t mip_rdata;
+  assign mip_rdata = {20'b0, 1'b0, 3'b0, mtip, 3'b0, 1'b0, 3'b0};
 
   // ---------------------------------------------------------------------
   // Address decode / read
@@ -98,7 +117,7 @@ module csr (
       CsrMepc:      csr_rdata = mepc_q;
       CsrMcause:    csr_rdata = mcause_q;
       CsrMtval:     csr_rdata = mtval_q;
-      CsrMip:       csr_rdata = mip_q;
+      CsrMip:       csr_rdata = mip_rdata;
       CsrMvendorid: csr_rdata = 32'd0;
       CsrMarchid:   csr_rdata = 32'd0;
       CsrMimpid:    csr_rdata = 32'd0;
@@ -137,14 +156,35 @@ module csr (
   assign illegal_instr_final = illegal_instr_in || csr_illegal;
 
   // ---------------------------------------------------------------------
+  // Interrupt-taken: reuses the exact same trap-entry machinery below
+  // (mepc<=pc, mcause, mstatus save-restore, sys_redirect to mtvec) as a
+  // synchronous exception — it's just a different way to set trap_cause.
+  // Gated on instr_valid && !amo_stall so an interrupt only ever preempts a
+  // genuine, fully-retiring instruction (never a bubble, never mid-way
+  // through an AMO*.W's 2-phase read-modify-write). Already mutually
+  // exclusive with the synchronous causes below (trap_taken_sync), so no
+  // separate priority encoder is needed between them.
+  // ---------------------------------------------------------------------
+  logic trap_taken_sync;
+  assign trap_taken_sync = illegal_instr_final || is_ecall || is_ebreak ||
+      store_misaligned || load_misaligned;
+
+  logic interrupt_pending, take_interrupt;
+  assign interrupt_pending = mstatus_mie_q && mtip && mie_q[7];
+  assign take_interrupt = instr_valid && !amo_stall && !trap_taken_sync && interrupt_pending;
+
+  // ---------------------------------------------------------------------
   // Trap cause selection (mutually exclusive by instruction category — see
-  // module header).
+  // module header — plus take_interrupt, itself mutually exclusive with
+  // all synchronous causes by construction above).
   // ---------------------------------------------------------------------
   xlen_t trap_cause, trap_val;
   always_comb begin
     trap_cause = '0;
     trap_val   = '0;
-    if (illegal_instr_final) begin
+    if (take_interrupt) begin
+      trap_cause = CAUSE_M_TIMER_INT;
+    end else if (illegal_instr_final) begin
       trap_cause = CAUSE_ILLEGAL_INSTR;
     end else if (is_ecall) begin
       trap_cause = CAUSE_ECALL_M;
@@ -159,8 +199,7 @@ module csr (
     end
   end
 
-  assign trap_taken = illegal_instr_final || is_ecall || is_ebreak ||
-      store_misaligned || load_misaligned;
+  assign trap_taken = trap_taken_sync || take_interrupt;
 
   logic mret_taken;
   assign mret_taken = is_mret && !trap_taken;
@@ -192,7 +231,6 @@ module csr (
       mstatus_mie_q  <= 1'b0;
       mstatus_mpie_q <= 1'b0;
       mie_q          <= '0;
-      mip_q          <= '0;
       mtvec_q        <= '0;
       mscratch_q     <= '0;
       mepc_q         <= '0;
@@ -219,8 +257,7 @@ module csr (
         CsrMepc:     mepc_q     <= {csr_new_value[31:2], 2'b00};
         CsrMcause:   mcause_q   <= csr_new_value;
         CsrMtval:    mtval_q    <= csr_new_value;
-        CsrMip:      mip_q      <= csr_new_value;
-        default:     ;  // misa/mvendorid/marchid/mimpid/mhartid: no storage, no-op
+        default:     ;  // misa/mip/mvendorid/marchid/mimpid/mhartid: no storage, no-op
       endcase
     end
   end
