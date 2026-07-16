@@ -12,7 +12,11 @@
 # Usage:
 #   sim/verilator/run_linux_boot.sh [+MAX_CYCLES=20000000]
 #
-# Run from the project root.
+# Run from the project root, in a real interactive terminal (not piped/
+# redirected/backgrounded), to type at the guest login prompt: host_stdin.c
+# puts this terminal in raw mode for the duration of the run and forwards
+# every keystroke into the simulated UART's RX line. Login as "root" (no
+# password). The terminal is restored automatically on exit.
 # ==========================================================
 
 set -euo pipefail
@@ -73,6 +77,8 @@ verilator --binary --timing -Wno-fatal \
     --top-module linux_boot_tb \
     "${RTL_FILES[@]}" \
     tb/soc/uart_rx_monitor.sv \
+    tb/soc/uart_tx_injector.sv \
+    tb/linux_boot/host_stdin.c \
     tb/linux_boot/linux_boot_tb.sv
 
 BIN="$BUILD_DIR/Vlinux_boot_tb"
