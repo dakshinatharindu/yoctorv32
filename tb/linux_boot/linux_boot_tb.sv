@@ -15,6 +15,17 @@
 // the real uart_tx waveform straight to stdout as it arrives, so partial
 // boot-log progress is visible even if the run hangs or times out.
 //
+// Interactive keyboard input: host_stdin.c puts the host terminal in raw/
+// non-blocking mode once at startup, and every cycle we poll it for a typed
+// byte (host_uart_rx_try_read() always returns immediately — never blocks
+// the simulator, unlike a plain $fgetc would). Any byte read gets bit-banged
+// onto uart_rx via uart_tx_injector (the testbench-side mirror of uart.sv's
+// own TX shifter), so real keystrokes reach the guest's ttyS0 exactly as if
+// an external peer had sent them — this is what lets you actually type at
+// a running Linux login prompt. If stdin isn't a real terminal (piped,
+// redirected, or a backgrounded batch run), host_uart_rx_init() is a no-op
+// and try_read() always returns -1, so non-interactive runs are unaffected.
+//
 // Usage: +MAX_CYCLES=20000000 (default; booting Linux is a lot of cycles)
 // =============================================================================
 
@@ -23,6 +34,9 @@
 module linux_boot_tb;
 
   import core_pkg::*;
+
+  import "DPI-C" function void host_uart_rx_init();
+  import "DPI-C" function int host_uart_rx_try_read();
 
   localparam int BootRomBytes = 4096;
   localparam xlen_t RamBase = 32'h8000_0000;
@@ -47,6 +61,7 @@ module linux_boot_tb;
   logic [3:0] dmem_wstrb;
   logic dmem_re;
   logic uart_tx;
+  logic host_rx_line;
 
   soc_top dut (
       .clk       (clk),
@@ -59,8 +74,57 @@ module linux_boot_tb;
       .dmem_re   (dmem_re),
       .dmem_rdata(dmem_rdata),
       .uart_tx   (uart_tx),
-      .uart_rx   (1'b1)  // idle/mark state; no RX injection in this exploratory harness yet
+      .uart_rx   (host_rx_line)
   );
+
+  // ---------------------------------------------------------------------
+  // Live keyboard input -> uart_rx, via host_stdin.c's non-blocking poll
+  // and uart_tx_injector's bit-accurate shifter (BIT_PERIOD_CYCLES=16
+  // matches the console's configured 1,000,000 baud @ clock-frequency
+  // 0x1000000 in yoctorv32.dts — the same value uart_rx_monitor below
+  // already assumes for decoding the other direction).
+  // ---------------------------------------------------------------------
+  logic       host_inj_send;
+  logic [7:0] host_inj_send_byte;
+  logic       host_inj_busy;
+
+  uart_tx_injector #(
+      .BIT_PERIOD_CYCLES(16)
+  ) u_host_injector (
+      .clk      (clk),
+      .rst_n    (rst_n),
+      .send     (host_inj_send),
+      .send_byte(host_inj_send_byte),
+      .busy     (host_inj_busy),
+      .tx       (host_rx_line)
+  );
+
+  // Ctrl+] (0x1D) quits the simulator instead of being forwarded to the
+  // guest — the same escape-key convention telnet/minicom/QEMU use. Needed
+  // because host_stdin.c deliberately disables ISIG in raw mode, so Ctrl+C/
+  // Ctrl+Z/Ctrl+\ no longer signal the host process at all; they're
+  // forwarded as plain bytes into the guest instead (so Ctrl+C now
+  // interrupts a process *inside* the emulated Linux, same as a real serial
+  // console), which is the whole point but leaves no other way to exit.
+  localparam logic [7:0] QuitKey = 8'h1D;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      host_inj_send <= 1'b0;
+    end else begin
+      host_inj_send <= 1'b0;  // pulse for exactly 1 cycle per byte
+      if (!host_inj_busy) begin
+        automatic int c = host_uart_rx_try_read();
+        if (c == 32'(QuitKey)) begin
+          $display("\nlinux_boot_tb: quit key (Ctrl+]) pressed, exiting.");
+          $finish;
+        end else if (c != -1) begin
+          host_inj_send_byte <= c[7:0];
+          host_inj_send      <= 1'b1;
+        end
+      end
+    end
+  end
 
   // ---------------------------------------------------------------------
   // Two-region memory model (boot ROM at 0, main RAM at RamBase). Purely a
@@ -147,6 +211,7 @@ module linux_boot_tb;
   // RTL bug. Keeping them on separate fds keeps the console output clean.
   initial begin
     cyc = 0;
+    host_uart_rx_init();
     progress_fd = $fopen("linux_boot_progress.log", "w");
 
     for (int i = 0; i < BootRomBytes; i++) boot_rom[i] = 8'h00;
