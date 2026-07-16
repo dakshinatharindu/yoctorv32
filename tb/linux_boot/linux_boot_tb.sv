@@ -27,7 +27,7 @@ module linux_boot_tb;
   localparam int BootRomBytes = 4096;
   localparam xlen_t RamBase = 32'h8000_0000;
   localparam int RamBytes = 32'h0400_0000;  // 64 MiB
-  localparam int MaxCyclesDefault = 20_000_000;
+  localparam int MaxCyclesDefault = 200_000_000;
 
   logic clk = 1'b0;
   logic rst_n = 1'b0;
@@ -137,9 +137,17 @@ module linux_boot_tb;
   string boot_stub_hex, kernel_hex, dtb_hex;
   int max_cycles;
   int cyc;
+  int progress_fd;
 
+  // Progress/diagnostic prints go to their own file descriptor, never to
+  // stdout: stdout carries only the raw decoded UART byte stream ($write
+  // above), and interleaving unsynchronized $display output into that
+  // same stream is what produced garbled-looking boot log text (each
+  // stream flushed independently, chopped up mid-line) — not a kernel or
+  // RTL bug. Keeping them on separate fds keeps the console output clean.
   initial begin
     cyc = 0;
+    progress_fd = $fopen("linux_boot_progress.log", "w");
 
     for (int i = 0; i < BootRomBytes; i++) boot_rom[i] = 8'h00;
     for (int i = 0; i < RamBytes; i++) main_ram[i] = 8'h00;
@@ -162,7 +170,7 @@ module linux_boot_tb;
       max_cycles = MaxCyclesDefault;
     end
 
-    $display("linux_boot_tb: boot_stub=%s kernel=%s dtb=%s max_cycles=%0d",
+    $fdisplay(progress_fd, "linux_boot_tb: boot_stub=%s kernel=%s dtb=%s max_cycles=%0d",
               boot_stub_hex, kernel_hex, dtb_hex, max_cycles);
 
     repeat (3) @(posedge clk);
@@ -171,12 +179,15 @@ module linux_boot_tb;
     while (cyc < max_cycles) begin
       @(posedge clk);
       cyc++;
-      if (cyc % 200000 == 0) begin
-        $display("linux_boot_tb: cyc=%0d imem_addr=%08h dmem_addr=%08h uart_bytes=%0d", cyc,
-                  imem_addr, dmem_addr, uart_byte_count);
+      if (cyc % 5000000 == 0) begin
+        $fdisplay(progress_fd, "linux_boot_tb: cyc=%0d imem_addr=%08h dmem_addr=%08h uart_bytes=%0d",
+                  cyc, imem_addr, dmem_addr, uart_byte_count);
+        $fflush(progress_fd);
       end
     end
 
+    $fdisplay(progress_fd, "linux_boot_tb: stopped after %0d cycles (%0d uart bytes decoded)", cyc,
+              uart_byte_count);
     $display("\nlinux_boot_tb: stopped after %0d cycles (%0d uart bytes decoded)", cyc,
               uart_byte_count);
     $finish;

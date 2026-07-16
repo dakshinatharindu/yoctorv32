@@ -91,8 +91,24 @@ module hazard_unit (
   // whatever amo_stall/ex_div_stall was holding — load_use_hazard gets
   // re-evaluated fresh against it next cycle, so nothing is skipped, just
   // deferred until it's safe to flush.
-  assign id_ex_flush = (load_use_hazard && !ex_div_stall && !amo_stall) || branch_taken ||
-      sys_redirect;
+  //
+  // branch_taken needs the exact same !amo_stall gate, for a different but
+  // structurally identical reason: ex_mem_stall is driven solely by
+  // amo_stall, so while an older AMO is being held in ex_mem_q, ex_mem_reg
+  // will not accept id_ex_q's instruction no matter what it is. If id_ex_q
+  // currently holds a taken branch/jump, flushing it here (unconditionally
+  // on branch_taken) discards that instruction's own result a cycle before
+  // ex_mem_q is ever able to receive it — id_ex_stall (which already
+  // includes amo_stall) holds id_ex_q's *content* in place, but without
+  // this gate the flush still wins and zeroes it anyway. Found via a real
+  // Linux boot: a `jal` immediately behind an AMO-holding cycle never wrote
+  // its return address, leaving `ra` stale; a later `ret` used that stale
+  // address and jumped into the middle of an unrelated loop. Same recovery
+  // as above — once amo_stall clears, branch_taken is re-evaluated fresh
+  // against the still-held id_ex_q, so the flush merely happens one cycle
+  // later, not never.
+  assign id_ex_flush = (load_use_hazard && !ex_div_stall && !amo_stall) ||
+      (branch_taken && !amo_stall) || sys_redirect;
 
   // Not OR'd with load_use_hazard: load-use needs id_ex_q to advance to a
   // bubble while the load proceeds into EX; div-stall/amo-stall need id_ex_q

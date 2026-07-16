@@ -19,7 +19,7 @@
 	cpus {
 		#address-cells = <0x01>;
 		#size-cells = <0x00>;
-		timebase-frequency = <0xf4240>;
+		timebase-frequency = <0x2dc6c0>;
 
 		cpu@0 {
 			phandle = <0x01>;
@@ -56,15 +56,40 @@
 		// reg-shift=2: our uart.sv is word-spaced (each register its own
 		// 32-bit word), not the real 16550's byte-packed layout — see
 		// rtl/peripherals/uart.sv's header for why. No interrupt-parent/
-		// interrupts: we have no PLIC yet, so this must present as
-		// polling-only (the in-tree 8250 driver falls back to polling
-		// when a UART node has no interrupts property).
+		// interrupts: this presents as polling-only (the in-tree 8250
+		// driver falls back to polling when a UART node has no
+		// interrupts property).
+		//
+		// compatible lists BOTH strings, matched independently by two
+		// different consumers:
+		//  - "ns16450" is listed first so the real platform driver
+		//    (8250_of.c's of_platform_serial_table) matches it first,
+		//    forcing port->type=PORT_16450 (fifo_size=1, tx_loadsz=1, no
+		//    UART_CAP_FIFO) — matching what this hardware actually is (a
+		//    single holding register, no FIFO; see uart.sv's header).
+		//    "ns16550a" would force PORT_16550A instead, which
+		//    unconditionally sets UART_CAP_FIFO/tx_loadsz=16 regardless of
+		//    our IIR/FCR readback — the panic/console emergency-write path
+		//    (serial8250_console_fifo_write) then blasts up to 16 bytes at
+		//    once with only one LSR.THRE check per batch, and most of
+		//    those bytes get silently dropped by uart.sv's
+		//    `thr_write && !tx_busy_q` guard, corrupting panic/oops output.
+		//  - "ns16550a" is listed second purely for earlycon: 8250_early.c
+		//    only registers OF_EARLYCON_DECLARE for "ns16550"/"ns16550a"
+		//    (no "ns16450" entry exists at all), and of_setup_earlycon
+		//    tries each compatible string in turn against that separate
+		//    table — "ns16450" alone left earlycon completely unmatched,
+		//    silently dropping every boot message before the platform
+		//    driver attaches (looked like a multi-hundred-million-cycle
+		//    hang: nothing printed until "Serial: 8250/16550 driver").
+		//    Each consumer picks the first string *it* recognizes, so
+		//    listing both here satisfies them independently.
 		uart@10000000 {
 			clock-frequency = <0x1000000>;
 			reg = <0x00 0x10000000 0x00 0x100>;
 			reg-shift = <0x02>;
 			reg-io-width = <0x04>;
-			compatible = "ns16550a";
+			compatible = "ns16450", "ns16550a";
 		};
 
 		// interrupts-extended targets the CPU's own local
