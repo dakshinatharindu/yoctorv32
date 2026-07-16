@@ -2,13 +2,24 @@
 // tb/soc/soc_tb.sv
 // =============================================================================
 // SoC-level self-checking testbench for soc_top (core_top + data_bus +
-// clint). Mirrors tb/core/core_tb.sv exactly (same synchronous RAM model,
-// same +HEXFILE/+MAX_CYCLES/+TOHOST_ADDR plusarg conventions, same tohost
-// snoop), except it instantiates soc_top instead of core_top directly, so
-// CLINT is reachable at its real mapped address (0x1100_0000) through the
-// actual interconnect rather than being tested in isolation.
+// clint + uart). Mirrors tb/core/core_tb.sv exactly (same synchronous RAM
+// model, same +HEXFILE/+MAX_CYCLES/+TOHOST_ADDR plusarg conventions, same
+// tohost snoop), except it instantiates soc_top instead of core_top
+// directly, so CLINT/UART are reachable at their real mapped addresses
+// through the actual interconnect rather than being tested in isolation.
+//
+// A uart_rx_monitor independently decodes the bit-accurate uart_tx
+// waveform (blind to the UART peripheral's internal registers) and
+// $displays every received byte at test completion — a second, hardware-
+// level confirmation alongside whatever the test program itself verified
+// from the register/software side. A uart_tx_injector drives the DUT's
+// uart_rx input, standing in for an external peer sending a byte, for
+// interrupt-driven-RX tests. Both share BIT_PERIOD_CYCLES=16, which must
+// match whatever divisor the UART test program under test actually
+// configures (currently all such tests use divisor=1).
 //
 // Usage: +HEXFILE=path/to/prog.vh [+MAX_CYCLES=100000] [+TOHOST_ADDR=1000]
+//        [+INJECT_BYTE=41] [+INJECT_CYCLE=2000]
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -32,6 +43,7 @@ module soc_tb;
   xlen_t dmem_addr, dmem_wdata, dmem_rdata;
   logic [3:0] dmem_wstrb;
   logic dmem_re;
+  logic uart_tx, uart_rx;
 
   soc_top dut (
       .clk       (clk),
@@ -42,7 +54,39 @@ module soc_tb;
       .dmem_wdata(dmem_wdata),
       .dmem_wstrb(dmem_wstrb),
       .dmem_re   (dmem_re),
-      .dmem_rdata(dmem_rdata)
+      .dmem_rdata(dmem_rdata),
+      .uart_tx   (uart_tx),
+      .uart_rx   (uart_rx)
+  );
+
+  localparam int UartMaxBytes = 64;
+  logic [7:0] uart_bytes[UartMaxBytes];
+  int unsigned uart_byte_count;
+
+  uart_rx_monitor #(
+      .BIT_PERIOD_CYCLES(16),
+      .MAX_BYTES(UartMaxBytes)
+  ) u_uart_monitor (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .tx        (uart_tx),
+      .bytes_q   (uart_bytes),
+      .byte_count(uart_byte_count)
+  );
+
+  logic inject_send;
+  logic [7:0] inject_byte;
+  logic inject_busy;
+
+  uart_tx_injector #(
+      .BIT_PERIOD_CYCLES(16)
+  ) u_uart_injector (
+      .clk      (clk),
+      .rst_n    (rst_n),
+      .send     (inject_send),
+      .send_byte(inject_byte),
+      .busy     (inject_busy),
+      .tx       (uart_rx)
   );
 
   // Synchronous reads (registered output), matching real BRAM: data for the
@@ -75,9 +119,13 @@ module soc_tb;
   string hexfile;
   int max_cycles;
   int cyc;
+  int inject_cycle;
+  int inject_byte_arg;
 
   initial begin
     cyc = 0;
+    inject_send = 1'b0;
+    inject_byte = 8'h00;
 
     for (int i = 0; i < MEM_BYTES; i++) mem[i] = 8'h00;
 
@@ -94,6 +142,13 @@ module soc_tb;
       tohost_addr = TOHOST_ADDR_DEFAULT;
     end
 
+    if (!$value$plusargs("INJECT_CYCLE=%d", inject_cycle)) begin
+      inject_cycle = 2000;
+    end
+    if (!$value$plusargs("INJECT_BYTE=%h", inject_byte_arg)) begin
+      inject_byte_arg = 32'h41;
+    end
+
     $display("soc_tb: loaded %s", hexfile);
 
     repeat (3) @(posedge clk);
@@ -102,6 +157,19 @@ module soc_tb;
     while (!test_done && cyc < max_cycles) begin
       @(posedge clk);
       cyc++;
+      inject_send <= 1'b0;
+      if (cyc == inject_cycle) begin
+        inject_byte <= inject_byte_arg[7:0];
+        inject_send <= 1'b1;
+      end
+    end
+
+    if (uart_byte_count > 0) begin
+      $write("soc_tb: uart_tx decoded %0d byte(s): ", uart_byte_count);
+      for (int i = 0; i < uart_byte_count; i++) begin
+        $write("%02h('%c') ", uart_bytes[i], uart_bytes[i]);
+      end
+      $write("\n");
     end
 
     if (!test_done) begin

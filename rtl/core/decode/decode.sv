@@ -462,8 +462,9 @@ module decode (
 
       // -----------------------------------------------------------------------
       // SYSTEM
-      // funct3=000 is ECALL/EBREAK/MRET, selected by the funct12 (instr[31:20])
-      // field; any other funct3 is a CSR instruction, with csr_op taken
+      // funct3=000 is ECALL/EBREAK/MRET/WFI, selected by the funct12
+      // (instr[31:20]) field; any other funct3 is a CSR instruction, with
+      // csr_op taken
       // directly from funct3[1:0] (CSR_RW=01/CSR_RS=10/CSR_RC=11) and
       // csr_use_imm = funct3[2] selecting the *I variants, whose rs1_addr
       // field (already generically extracted above) is actually a 5-bit
@@ -478,6 +479,9 @@ module decode (
               12'h000: is_ecall  = 1'b1;
               12'h001: is_ebreak = 1'b1;
               12'h302: is_mret   = 1'b1;
+              12'h105: ;  // WFI: legal NOP (no low-power stall-until-interrupt
+              // implemented — correctness only, matches an in-order core
+              // with no idle state to actually suspend).
               default: illegal_instr = 1'b1;
             endcase
           end

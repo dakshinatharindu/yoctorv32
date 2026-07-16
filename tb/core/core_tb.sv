@@ -55,7 +55,8 @@ module core_tb;
       .dmem_wstrb(dmem_wstrb),
       .dmem_re   (dmem_re),
       .dmem_rdata(dmem_rdata),
-      .mtip      (1'b0)  // no CLINT at this test level; core-only directed tests
+      .mtip      (1'b0),  // no CLINT at this test level; core-only directed tests
+      .meip      (1'b0)  // no PLIC at this test level; core-only directed tests
   );
 
   // Synchronous reads (registered output), matching real BRAM: data for the
