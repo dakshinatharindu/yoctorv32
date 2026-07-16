@@ -29,6 +29,7 @@ package core_pkg;
   localparam logic [31:0] CAUSE_BREAKPOINT = 32'd3;
   localparam logic [31:0] CAUSE_LOAD_MISALIGNED = 32'd4;
   localparam logic [31:0] CAUSE_STORE_MISALIGNED = 32'd6;
+  localparam logic [31:0] CAUSE_ECALL_U = 32'd8;
   localparam logic [31:0] CAUSE_ECALL_M = 32'd11;
 
   // Interrupts (mcause bit 31 set). Software/external listed for encoding

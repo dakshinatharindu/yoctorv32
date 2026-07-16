@@ -28,9 +28,27 @@
 // enforcement — confirmed necessary, not speculative: tracing a real Linux
 // boot showed the kernel's early M-mode setup unconditionally executing
 // `csrw pmpaddr0, ...` / `csrw pmpcfg0, ...`, which would otherwise
-// illegal-instruction-trap. No access control is meaningful here anyway —
-// this core never enters S/U mode, so PMP has no privilege boundary left to
-// enforce (matches remu's own approach, per the earlier gap-analysis).
+// illegal-instruction-trap. This core DOES enter U-mode now (see priv_q
+// below) but still does not enforce PMP range checks — a real gap for
+// memory protection/security, but not for boot correctness (no legitimate
+// userspace code depends on PMP faulting), so it's left as WARL storage
+// only, same as before.
+//
+// Privilege mode (priv_q, M or U — no S-mode: this core/DTB never declare
+// the S extension, and only M/U are needed for a NOMMU Linux port) is real,
+// tracked state, not hardwired: mstatus.MPP is genuine read/write storage
+// (mstatus_mpp_q), saved with the current privilege on every trap entry and
+// restored (then reset to U, the least-privileged supported mode, per the
+// xRET spec) on every mret. ECALL's cause is selected from priv_q
+// (CAUSE_ECALL_U vs CAUSE_ECALL_M) — this matters because Linux's NOMMU
+// M-mode port dispatches on it: cause 8 (ECALL_U) reaches the real syscall
+// handler, while cause 11 (ECALL_M) is wired as a fatal error path. Before
+// this, MPP was hardwired to M and every ECALL reported cause 11
+// unconditionally, so a userspace process's very first syscall (already
+// running "in userspace" only by the kernel's own bookkeeping, never
+// actually lowered to U-mode in hardware) always looked like a fatal
+// exception. Confirmed against remu's own source (not just its README):
+// remu tracks a real PrivMode and does exactly this on ecall/mret.
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -100,16 +118,21 @@ module csr (
   // State
   // ---------------------------------------------------------------------
   logic  mstatus_mie_q, mstatus_mpie_q;
+  logic [1:0] mstatus_mpp_q;
   xlen_t mie_q;
   xlen_t mtvec_q, mscratch_q, mepc_q, mcause_q, mtval_q;
   xlen_t pmpcfg_q[4];
   xlen_t pmpaddr_q[16];
 
+  // Current privilege the core is executing at — 1=M, 0=U (no S-mode; see
+  // module header). Reset value M matches the RISC-V spec's reset state.
+  logic priv_m_q;
+
   xlen_t mstatus_rdata;
-  // bit3=MIE, bit7=MPIE, bits[12:11]=MPP hardwired to 2'b11 (M-mode only,
-  // no S/U mode ever entered), all other bits 0.
+  // bit3=MIE, bit7=MPIE, bits[12:11]=MPP (real storage, mstatus_mpp_q), all
+  // other bits 0.
   // [31:13]=0(19) [12:11]=MPP(2) [10:8]=0(3) [7]=MPIE(1) [6:4]=0(3) [3]=MIE(1) [2:0]=0(3)
-  assign mstatus_rdata = {19'b0, 2'b11, 3'b0, mstatus_mpie_q, 3'b0, mstatus_mie_q, 3'b0};
+  assign mstatus_rdata = {19'b0, mstatus_mpp_q, 3'b0, mstatus_mpie_q, 3'b0, mstatus_mie_q, 3'b0};
 
   // mip is read-only, derived live from hardware interrupt sources — never
   // software-writable (a real hart only ever lets software clear MTIP/MEIP
@@ -177,10 +200,25 @@ module csr (
   assign csr_addr_readonly = (csr_addr[11:10] == 2'b11);
   assign csr_write_attempted = csr_en &&
       ((csr_op == CSR_RW) || (((csr_op == CSR_RS) || (csr_op == CSR_RC)) && (csr_operand != '0)));
-  assign csr_illegal = csr_en && (!csr_addr_known || (csr_addr_readonly && csr_write_attempted));
+  // Every CSR this core implements is M-mode-only by its architectural
+  // address encoding (addr[9:8]==2'b11) — pmpcfg/pmpaddr, mstatus, and the
+  // rest all fall in that range, and nothing U-mode-accessible (e.g. no
+  // cycle/time/instret) is implemented. Now that priv_m_q is real tracked
+  // state instead of hardwired M, any CSR instruction executed from U-mode
+  // must trap illegal — no legitimate userspace code should ever execute
+  // one, but this closes the gap per spec now that it's actually reachable.
+  assign csr_illegal = csr_en &&
+      (!csr_addr_known || (csr_addr_readonly && csr_write_attempted) || !priv_m_q);
+
+  // mret is privileged (M-mode-only) same as every CSR above — executing it
+  // from U-mode must trap illegal rather than actually returning, though in
+  // practice Linux never issues mret from userspace, so this is spec
+  // completeness rather than something boot correctness depends on.
+  logic mret_priv_illegal;
+  assign mret_priv_illegal = is_mret && !priv_m_q;
 
   logic illegal_instr_final;
-  assign illegal_instr_final = illegal_instr_in || csr_illegal;
+  assign illegal_instr_final = illegal_instr_in || csr_illegal || mret_priv_illegal;
 
   // ---------------------------------------------------------------------
   // Interrupt-taken: reuses the exact same trap-entry machinery below
@@ -236,7 +274,7 @@ module csr (
     end else if (illegal_instr_final) begin
       trap_cause = CAUSE_ILLEGAL_INSTR;
     end else if (is_ecall) begin
-      trap_cause = CAUSE_ECALL_M;
+      trap_cause = priv_m_q ? CAUSE_ECALL_M : CAUSE_ECALL_U;
     end else if (is_ebreak) begin
       trap_cause = CAUSE_BREAKPOINT;
     end else if (store_misaligned) begin
@@ -279,6 +317,8 @@ module csr (
     if (!rst_n) begin
       mstatus_mie_q  <= 1'b0;
       mstatus_mpie_q <= 1'b0;
+      mstatus_mpp_q  <= 2'b11;
+      priv_m_q       <= 1'b1;
       mie_q          <= '0;
       mtvec_q        <= '0;
       mscratch_q     <= '0;
@@ -293,9 +333,20 @@ module csr (
       mtval_q        <= trap_val;
       mstatus_mpie_q <= mstatus_mie_q;
       mstatus_mie_q  <= 1'b0;
+      // Save the privilege the trap interrupted, then traps always land in
+      // M-mode (no S-mode to delegate to).
+      mstatus_mpp_q  <= priv_m_q ? 2'b11 : 2'b00;
+      priv_m_q       <= 1'b1;
     end else if (mret_taken) begin
       mstatus_mie_q  <= mstatus_mpie_q;
       mstatus_mpie_q <= 1'b1;
+      // Restore the privilege mret is returning to, then per the xRET spec
+      // MPP is reset to the least-privileged supported mode (U) — anything
+      // other than 2'b11 is treated as U, a safe default for a reserved/
+      // unsupported encoding (e.g. 2'b01/2'b10, S-mode/reserved, neither of
+      // which this core implements).
+      priv_m_q       <= (mstatus_mpp_q == 2'b11);
+      mstatus_mpp_q  <= 2'b00;
     end else if (csr_write_en) begin
       if (is_pmpcfg) begin
         pmpcfg_q[csr_addr[1:0]] <= csr_new_value;
@@ -306,6 +357,17 @@ module csr (
           CsrMstatus: begin
             mstatus_mie_q  <= csr_new_value[3];
             mstatus_mpie_q <= csr_new_value[7];
+            // WARL: only M(2'b11)/U(2'b00) are legal MPP encodings on this
+            // core (no S-mode) — any other attempted value (S=2'b01,
+            // reserved=2'b10) must collapse to a supported one, not be
+            // stored verbatim. This isn't just spec pedantry: riscv-tests'
+            // own boilerplate (rv64mi/illegal.S) writes MPP=S and reads it
+            // back specifically to detect "is S-mode present," expecting
+            // the readback to NOT show S when it isn't — storing the raw
+            // value verbatim made that probe wrongly conclude S-mode was
+            // present and fall into test code exercising sstatus/satp/etc,
+            // which this core doesn't implement.
+            mstatus_mpp_q  <= (csr_new_value[12:11] == 2'b11) ? 2'b11 : 2'b00;
           end
           CsrMie:      mie_q      <= csr_new_value;
           CsrMtvec:    mtvec_q    <= {csr_new_value[31:2], 2'b00};
