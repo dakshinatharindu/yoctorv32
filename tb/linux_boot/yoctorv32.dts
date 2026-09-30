@@ -19,7 +19,13 @@
 	cpus {
 		#address-cells = <0x01>;
 		#size-cells = <0x00>;
-		timebase-frequency = <0x2dc6c0>;
+		// 12 MHz. clint.sv's mtime ticks once per clk, so this only sets
+		// how many cycles Linux treats as one second: with HZ=250 a
+		// jiffy is 48,000 cycles. Each timer tick costs ~3,700 cycles
+		// here, so lower values drown the boot in tick overhead
+		// (measured cycles to login prompt: 1.5 MHz 340M, 3 MHz 190M,
+		// 6 MHz 160M, 12 MHz 145M, 24 MHz 145M; 1 MHz livelocks).
+		timebase-frequency = <0xb71b00>;
 
 		cpu@0 {
 			phandle = <0x01>;
