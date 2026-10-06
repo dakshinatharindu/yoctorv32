@@ -18,7 +18,10 @@ sim/.Xil/
 
 # Ignore Vivado redundant files
 sim/vivado/.Xil/
+.Xil/
+fpga/**/build/
 *.jou
 *.log
 *.str
 .claude/settings.local.json
+.vscode/settings.json
