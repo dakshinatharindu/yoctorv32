@@ -38,7 +38,7 @@
 //
 // Reset: use the same reset as soc_top. The AXI master is deliberately NOT
 // on that reset; it finishes a transaction in flight by itself, and the
-// reset must be held until its busy output has gone low (see soc_ddr.sv).
+// reset must be held until its busy output has gone low (see fpga_soc.sv).
 // =============================================================================
 
 `timescale 1ns / 1ps

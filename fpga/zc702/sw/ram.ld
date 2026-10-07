@@ -1,5 +1,5 @@
 /* =============================================================================
- * fpga/zc702/sw/common/ram.ld
+ * fpga/zc702/sw/ram.ld
  * =============================================================================
  * Linker script for bare-metal programs that are loaded into main RAM (PS DDR
  * on the board) and started by the boot program's jump to 0x80000000, the

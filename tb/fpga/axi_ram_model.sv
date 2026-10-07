@@ -22,8 +22,6 @@
 //                       like RD=11, WR=8 as seen through hp_axi_master).
 //
 // Backdoor access for testbenches: peek() and poke() take byte addresses.
-// fault_en/fault_addr flip one bit of the data read from one word, to check
-// that a memory test really detects errors.
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -34,9 +32,6 @@ module axi_ram_model #(
 ) (
     input logic clk,
     input logic rst_n,
-
-    input logic        fault_en,
-    input logic [31:0] fault_addr,
 
     input  logic [ID_WIDTH-1:0] s_axi_awid,
     input  logic [        31:0] s_axi_awaddr,
@@ -217,8 +212,7 @@ module axi_ram_model #(
         end else begin
           s_axi_rvalid <= 1'b1;
           s_axi_rid    <= ar_id_q;
-          s_axi_rdata  <= peek(ar_addr_q) ^
-              ((fault_en && ar_addr_q[31:2] == fault_addr[31:2]) ? 32'h0000_0020 : 32'h0);
+          s_axi_rdata  <= peek(ar_addr_q);
         end
       end
 

@@ -1,8 +1,8 @@
 # =============================================================================
-# fpga/zc702/bd/ps7.tcl
+# fpga/zc702/scripts/ps7.tcl
 # =============================================================================
 # Defines create_ps7_bd, which adds a block design holding only the Zynq
-# processing system (PS) to the current Vivado project. The PL designs use
+# processing system (PS) to the current Vivado project. The PL design uses
 # the PS for exactly three things:
 #   - its DDR controller, reached from the PL through the S_AXI_HP0 port
 #     (AXI3, 32-bit data), clocked by a PL clock on hp0_aclk
@@ -15,7 +15,7 @@
 # that initializes the PS over JTAG; create_ps7_bd returns its path.
 #
 # Usage, inside a project created for xc7z020clg484-1:
-#   source fpga/zc702/bd/ps7.tcl
+#   source fpga/zc702/scripts/ps7.tcl
 #   set ps7_init [create_ps7_bd 50000000]
 # The top level then instantiates the generated module ps7_bd_wrapper.
 # =============================================================================

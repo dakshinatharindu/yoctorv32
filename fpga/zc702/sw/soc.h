@@ -1,5 +1,5 @@
 // =============================================================================
-// fpga/zc702/sw/common/soc.h
+// fpga/zc702/sw/soc.h
 // =============================================================================
 // Addresses and UART definitions shared by the bare-metal FPGA programs
 // (assembly; include with #include "soc.h").

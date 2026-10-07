@@ -1,10 +1,10 @@
 // =============================================================================
-// fpga/zc702/rtl/soc_ddr.sv
+// fpga/zc702/rtl/fpga_soc.sv
 // =============================================================================
 // soc_top running out of PS DDR: soc_top + mem_bridge + hp_axi_master, with
 // the AXI3 master port left open at the top. Free of vendor primitives, so
-// the board top (fpga_top_ddr.sv) connects the port to the Zynq PS and the
-// simulation (tb/fpga/soc_ddr_tb.sv) connects it to axi_ram_model.
+// the board top (fpga_top.sv) connects the port to the Zynq PS and the
+// simulation (tb/fpga/fpga_soc_tb.sv) connects it to axi_ram_model.
 //
 // Two levels of reset:
 //   hard_rst_n  resets everything, including the AXI master. Asynchronous
@@ -21,7 +21,7 @@
 
 `timescale 1ns / 1ps
 
-module soc_ddr #(
+module fpga_soc #(
     parameter int unsigned BOOT_BYTES     = 4096,
     parameter              BOOT_INIT_FILE = "",
     parameter logic [31:0] RAM_BASE       = 32'h8000_0000,

@@ -1,19 +1,16 @@
 // =============================================================================
-// fpga/zc702/sw/hello/hello.S
+// fpga/zc702/sw/hello.S
 // =============================================================================
 // Bare-metal test program for the ZC702: programs the UART's baud divisor,
 // prints a banner, then echoes every received byte, all in polling mode (no
-// interrupts). Built two ways by build.sh:
+// interrupts).
 //
-//   hello.mem      milestone 1: linked at address 0 (core_pkg::RESET_PC), for
-//                  the 64 KiB block RAM in fpga_top.sv.
-//   hello_ddr.bin  milestone 2: built with -DDDR_IMAGE and linked at
-//                  0x80000000, to be loaded into PS DDR and started by the
-//                  boot program (sw/boot/boot.S). That build begins with a
-//                  jump over the image magic word the boot program checks
-//                  for, at the offset where a Linux kernel Image has it.
+// It is linked at 0x80000000 (ram.ld), loaded into PS DDR over JTAG
+// (scripts/run.tcl) and started by the boot program (boot.S). Like a Linux
+// kernel Image, it begins with a jump over the image magic word the boot
+// program checks for.
 //
-// UART details and the CLK_HZ/BAUD divisor calculation are in common/soc.h.
+// UART details and the CLK_HZ/BAUD divisor calculation are in soc.h.
 // =============================================================================
 
 #include "soc.h"
@@ -21,12 +18,10 @@
 .section .text.start
 .global _start
 _start:
-#ifdef DDR_IMAGE
     j    start
     .org IMAGE_MAGIC_OFFSET
     .word IMAGE_MAGIC
 start:
-#endif
     li   s0, UART_BASE
     uart_init s0, t0
 
@@ -68,8 +63,4 @@ putc:
 
 .section .rodata
 banner:
-#ifdef DDR_IMAGE
     .asciz "\r\nyoctorv32 on ZC702: running from DDR at 80000000\r\nType something, it will be echoed:\r\n"
-#else
-    .asciz "\r\n\r\nyoctorv32 on ZC702: the RV32IMA core is alive\r\nType something, it will be echoed:\r\n"
-#endif

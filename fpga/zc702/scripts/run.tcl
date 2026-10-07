@@ -1,22 +1,22 @@
 # =============================================================================
-# fpga/zc702/scripts/run_ddr.tcl
+# fpga/zc702/scripts/run.tcl
 # =============================================================================
-# Starts the milestone 2 design (fpga_top_ddr: the SoC running out of PS DDR)
-# on the ZC702 over JTAG (xsdb):
+# Starts the design (fpga_top: the SoC running out of PS DDR) on the ZC702
+# over JTAG (xsdb):
 #   1. resets the Zynq PS (this also clears the PL)
-#   2. programs the PL with build/yoctorv32_ddr.bit
+#   2. programs the PL with build/yoctorv32.bit
 #   3. initializes the PS with build/ps7_init.tcl: clocks, DDR controller
 #   4. copies the given images into DDR and spot-checks them
 #   5. releases the PL (ps7_post_config): the core leaves reset, the boot
 #      program in the boot RAM prints its banner on the serial port (9600
 #      baud) and jumps to 0x80000000 if it finds an image there
 #
-# Usage, with the board in JTAG boot mode and build_ddr.tcl already run:
-#   xsdb fpga/zc702/scripts/run_ddr.tcl [<file> <address> ...]
+# Usage, with the board in JTAG boot mode and build.tcl already run:
+#   xsdb fpga/zc702/scripts/run.tcl [<file> <address> ...]
 #
 # Each <file> is a raw binary and <address> is where the core should see it,
 # inside main RAM (0x80000000..0x83FFFFFF). For example:
-#   xsdb fpga/zc702/scripts/run_ddr.tcl fpga/zc702/build/hello_ddr.bin 0x80000000
+#   xsdb fpga/zc702/scripts/run.tcl fpga/zc702/build/hello.bin 0x80000000
 # With no images, the word the boot program checks is cleared instead, so it
 # reports "no image" rather than starting whatever a previous run left in DDR.
 #
@@ -26,24 +26,24 @@
 
 set here [file dirname [file normalize [info script]]]
 set out  [file normalize $here/../build]
-set bit  $out/yoctorv32_ddr.bit
+set bit  $out/yoctorv32.bit
 set init $out/ps7_init.tcl
 
 # Must match RAM_BASE / RAM_BYTES / DDR_BASE in fpga/zc702/rtl/mem_bridge.sv
-# and IMAGE_MAGIC_OFFSET in fpga/zc702/sw/common/soc.h.
+# and IMAGE_MAGIC_OFFSET in fpga/zc702/sw/soc.h.
 set RAM_BASE   0x80000000
 set RAM_BYTES  0x04000000
 set DDR_BASE   0x10000000
 set MAGIC_OFF  0x38
 
 if {[llength $argv] % 2 != 0} {
-  puts "usage: xsdb run_ddr.tcl \[<file> <address> ...\]"
+  puts "usage: xsdb run.tcl \[<file> <address> ...\]"
   exit 1
 }
 foreach f [list $bit $init] {
   if {![file exists $f]} {
-    puts "ERROR: $f not found. Run fpga/zc702/sw/boot/build.sh, then:"
-    puts "       vivado -mode batch -source fpga/zc702/scripts/build_ddr.tcl"
+    puts "ERROR: $f not found. Run fpga/zc702/sw/build.sh, then:"
+    puts "       vivado -mode batch -source fpga/zc702/scripts/build.tcl"
     exit 1
   }
 }

@@ -1,9 +1,11 @@
 # =============================================================================
-# fpga/zc702/constr/zc702_ddr.xdc
+# fpga/zc702/zc702.xdc
 # =============================================================================
-# Pin and timing constraints for fpga_top_ddr on the ZC702 (xc7z020clg484-1).
-# Same PL pins as zc702.xdc, plus two status LEDs (UG850 v1.7). The PS pins
-# (DDR, MIO) need no entries here: the PS7 block supplies its own constraints.
+# Pin and timing constraints for fpga_top on the ZC702 (xc7z020clg484-1).
+# PL pin assignments are from the ZC702 user guide (UG850 v1.7); all PL banks
+# on this board run from VADJ (2.5 V), hence LVCMOS25 / LVDS_25 throughout.
+# The PS pins (DDR, MIO) need no entries here: the PS7 block supplies its own
+# constraints.
 # =============================================================================
 
 # 200 MHz LVDS system clock (U43), terminated on the board. The 50 MHz core
@@ -26,9 +28,9 @@ set_property -dict {PACKAGE_PIN W10 IOSTANDARD LVCMOS25} [get_ports led_error]  
 set_property -dict {PACKAGE_PIN G19 IOSTANDARD LVCMOS25} [get_ports btn_rst]  ;# GPIO_SW_N, SW5 (left)
 
 # The button, the UART lines and the LEDs are asynchronous to clk or
-# human-speed; btn_rst and uart_rx_pin are resynchronized inside soc_ddr.
+# human-speed; btn_rst and uart_rx_pin are resynchronized inside fpga_soc.
 set_false_path -from [get_ports {btn_rst uart_rx_pin}]
 set_false_path -to [get_ports {uart_tx_pin led_alive led_running led_error}]
 
-# fclk_reset0_n comes from the PS and is resynchronized inside soc_ddr.
+# fclk_reset0_n comes from the PS and is resynchronized inside fpga_soc.
 set_false_path -through [get_pins -hierarchical -filter {NAME =~ *ps7*/FCLK_RESET0_N}]

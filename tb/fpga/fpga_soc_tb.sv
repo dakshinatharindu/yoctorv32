@@ -1,8 +1,8 @@
 // =============================================================================
-// tb/fpga/soc_ddr_tb.sv
+// tb/fpga/fpga_soc_tb.sv
 // =============================================================================
 // Simulation of the DDR-backed SoC that goes on the FPGA (fpga/zc702/rtl/
-// soc_ddr.sv: soc_top + mem_bridge + hp_axi_master), with axi_ram_model
+// fpga_soc.sv: soc_top + mem_bridge + hp_axi_master), with axi_ram_model
 // standing in for the Zynq PS's AXI port and DDR. Whatever runs here runs
 // through the same bridge, clock-enable pacing and AXI master as on the
 // board; only the PS and the clocking primitives are missing.
@@ -45,7 +45,7 @@
 
 `timescale 1ns / 1ps
 
-module soc_ddr_tb #(
+module fpga_soc_tb #(
     parameter int UART_BIT_CYCLES = 16
 );
 
@@ -72,7 +72,7 @@ module soc_ddr_tb #(
   logic awvalid, awready, wlast, wvalid, wready, bvalid, bready;
   logic arvalid, arready, rlast, rvalid, rready;
 
-  soc_ddr #(
+  fpga_soc #(
       .BOOT_BYTES(BootBytes),
       .RAM_BASE  (RamBase),
       .RAM_BYTES (RamBytes),
@@ -128,8 +128,6 @@ module soc_ddr_tb #(
   axi_ram_model u_ram (
       .clk          (clk),
       .rst_n        (hard_rst_n),
-      .fault_en     (1'b0),
-      .fault_addr   (32'h0),
       .s_axi_awid   (awid),
       .s_axi_awaddr (awaddr),
       .s_axi_awlen  (awlen),
@@ -270,11 +268,11 @@ module soc_ddr_tb #(
   int progress_fd;
 
   task automatic report_and_finish(input string verdict, input logic ok);
-    $display("\nsoc_ddr_tb: %s after %0d core cycles, %0d clocks (%.1f clocks per core cycle), %0d UART bytes",
+    $display("\nfpga_soc_tb: %s after %0d core cycles, %0d clocks (%.1f clocks per core cycle), %0d UART bytes",
              verdict, core_cycles, clk_cycles,
              core_cycles == 0 ? 0.0 : real'(clk_cycles) / real'(core_cycles), uart_byte_count);
     if (bus_error) begin
-      $display("soc_ddr_tb: FAIL the bridge saw an AXI error response");
+      $display("fpga_soc_tb: FAIL the bridge saw an AXI error response");
       $fatal(1, "FAIL");
     end
     if (ok) $finish;
@@ -298,7 +296,7 @@ module soc_ddr_tb #(
       for (int i = 0; i < BootBytes / 4; i++) dut.u_bridge.boot_mem[i] = 32'h0;
       $readmemh(boot_file, dut.u_bridge.boot_mem);
     end else begin
-      $fatal(1, "soc_ddr_tb: missing +BOOT=<file> plusarg");
+      $fatal(1, "fpga_soc_tb: missing +BOOT=<file> plusarg");
     end
 
     // Main RAM images -> the model's DDR, as the JTAG download does. Bytes
@@ -314,7 +312,7 @@ module soc_ddr_tb #(
       end
     end
 
-    progress_fd = $fopen("soc_ddr_progress.log", "w");
+    progress_fd = $fopen("fpga_soc_progress.log", "w");
 
     repeat (3) @(posedge clk);
     hard_rst_n = 1'b1;
@@ -334,7 +332,7 @@ module soc_ddr_tb #(
         repeat (11 * UART_BIT_CYCLES) @(posedge clk);
         bytes_at_reset = uart_byte_count;
         injected       = 1'b0;
-        $display("\nsoc_ddr_tb: reset request (%0d left)", reset_count);
+        $display("\nfpga_soc_tb: reset request (%0d left)", reset_count);
       end
 
       inject_send <= 1'b0;
@@ -346,7 +344,7 @@ module soc_ddr_tb #(
       end
 
       if (core_cycles != 0 && (core_cycles % 5000000) == 0 && dut.ce) begin
-        $fdisplay(progress_fd, "soc_ddr_tb: core=%0d clk=%0d imem_addr=%08h uart_bytes=%0d",
+        $fdisplay(progress_fd, "fpga_soc_tb: core=%0d clk=%0d imem_addr=%08h uart_bytes=%0d",
                   core_cycles, clk_cycles, dut.imem_addr, uart_byte_count);
         $fflush(progress_fd);
       end
@@ -354,7 +352,7 @@ module soc_ddr_tb #(
       if (test_done) begin
         if (test_result == 32'h1) report_and_finish("PASS", 1'b1);
         else begin
-          $display("soc_ddr_tb: tohost result=0x%08h", test_result);
+          $display("fpga_soc_tb: tohost result=0x%08h", test_result);
           report_and_finish("FAIL", 1'b0);
         end
       end
@@ -379,8 +377,8 @@ module soc_ddr_tb #(
 
   initial begin
     if ($test$plusargs("VCD")) begin
-      $dumpfile("soc_ddr_tb.vcd");
-      $dumpvars(0, soc_ddr_tb);
+      $dumpfile("fpga_soc_tb.vcd");
+      $dumpvars(0, fpga_soc_tb);
     end
   end
 

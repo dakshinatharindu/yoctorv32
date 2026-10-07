@@ -1,5 +1,5 @@
 // =============================================================================
-// fpga/zc702/sw/boot/boot.S
+// fpga/zc702/sw/boot.S
 // =============================================================================
 // Boot program for the DDR-backed SoC on the ZC702. Lives in the 4 KiB boot
 // RAM at address 0 (core_pkg::RESET_PC), built into the bitstream. It is the

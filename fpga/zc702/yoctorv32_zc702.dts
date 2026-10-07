@@ -1,9 +1,9 @@
 /dts-v1/;
 
 /*
- * fpga/zc702/linux/yoctorv32_zc702.dts
+ * fpga/zc702/yoctorv32_zc702.dts
  *
- * Device tree for yoctorv32 on the ZC702 (fpga_top_ddr): the simulation's
+ * Device tree for yoctorv32 on the ZC702 (fpga_top): the simulation's
  * tb/linux_boot/yoctorv32.dts with the console settings changed to what the
  * board has. Everything else, and the reasoning in the comments below, is
  * unchanged. Differences:
