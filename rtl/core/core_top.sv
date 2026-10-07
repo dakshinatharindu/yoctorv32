@@ -27,7 +27,10 @@ module core_top (
     // where ce is 1; while it is 0 the whole core holds its state and its
     // imem_*/dmem_* outputs stay stable. The memory must follow the same
     // rule (only register read data / apply writes on ce edges), so that
-    // from the core's point of view it still has exactly 1 cycle of latency.
+    // from the core's point of view it still has exactly 1 cycle of latency:
+    // on an enabled edge the core samples the data for the addresses of its
+    // previous enabled cycle, and the data for the addresses it presents now
+    // must only appear after that edge.
     // The one thing the memory must do on its own is read imem_addr (which
     // sits at RESET_PC) before the first enabled cycle after reset, because
     // that cycle already consumes the instruction.

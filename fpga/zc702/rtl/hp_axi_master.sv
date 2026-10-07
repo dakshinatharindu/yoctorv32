@@ -7,8 +7,9 @@
 //
 // Request port:
 //   - A request starts on a cycle where req_valid is 1 and the master is
-//     idle. req_write/req_addr/req_wdata/req_wstrb must then be held stable
-//     until req_done.
+//     idle. req_write/req_addr/req_wdata/req_wstrb are sampled in that cycle
+//     only, so a transaction that has started always runs to completion on
+//     the values it started with, even if the requester is reset meanwhile.
 //   - req_done pulses for exactly one cycle when the transaction has
 //     completed. req_rdata (reads) and req_error (SLVERR/DECERR response)
 //     are valid in that cycle and hold until the next req_done.
@@ -19,6 +20,11 @@
 // AW and W are issued together and complete independently, as AXI allows.
 // All valid outputs and the response capture are registered, so nothing
 // combinational connects the PS7's outputs back to its inputs.
+//
+// Reset this module only together with the AXI slave (or while idle): an
+// AXI transaction cannot be abandoned half way. A requester that needs its
+// own reset should instead wait out any transaction in flight, which the
+// busy output shows.
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -37,6 +43,7 @@ module hp_axi_master #(
     output logic        req_done,
     output logic [31:0] req_rdata,
     output logic        req_error,
+    output logic        busy,       // a transaction is in flight
 
     // AXI3 write address channel
     output logic [ID_WIDTH-1:0] m_axi_awid,
@@ -95,6 +102,10 @@ module hp_axi_master #(
 
   state_e state_q;
   logic awvalid_q, wvalid_q, arvalid_q;
+  logic [31:0] addr_q, wdata_q;
+  logic [3:0] wstrb_q;
+
+  assign busy = (state_q != ST_IDLE);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -102,6 +113,9 @@ module hp_axi_master #(
       awvalid_q <= 1'b0;
       wvalid_q  <= 1'b0;
       arvalid_q <= 1'b0;
+      addr_q    <= '0;
+      wdata_q   <= '0;
+      wstrb_q   <= 4'b0000;
       req_done  <= 1'b0;
       req_rdata <= '0;
       req_error <= 1'b0;
@@ -113,6 +127,9 @@ module hp_axi_master #(
           // !req_done: the request on the bus during the done cycle is the
           // one that just finished, not a new one.
           if (req_valid && !req_done) begin
+            addr_q  <= {req_addr[31:2], 2'b00};
+            wdata_q <= req_wdata;
+            wstrb_q <= req_wstrb;
             if (req_write) begin
               awvalid_q <= 1'b1;
               wvalid_q  <= 1'b1;
@@ -153,7 +170,7 @@ module hp_axi_master #(
   // Single-beat, 4-byte, normal non-secure access; "bufferable" only, like
   // the tools' own masters use for DDR.
   assign m_axi_awid    = '0;
-  assign m_axi_awaddr  = {req_addr[31:2], 2'b00};
+  assign m_axi_awaddr  = addr_q;
   assign m_axi_awlen   = 4'd0;
   assign m_axi_awsize  = 3'b010;
   assign m_axi_awburst = 2'b01;
@@ -164,15 +181,15 @@ module hp_axi_master #(
   assign m_axi_awvalid = awvalid_q;
 
   assign m_axi_wid     = '0;
-  assign m_axi_wdata   = req_wdata;
-  assign m_axi_wstrb   = req_wstrb;
+  assign m_axi_wdata   = wdata_q;
+  assign m_axi_wstrb   = wstrb_q;
   assign m_axi_wlast   = 1'b1;
   assign m_axi_wvalid  = wvalid_q;
 
   assign m_axi_bready  = (state_q == ST_WRITE);
 
   assign m_axi_arid    = '0;
-  assign m_axi_araddr  = {req_addr[31:2], 2'b00};
+  assign m_axi_araddr  = addr_q;
   assign m_axi_arlen   = 4'd0;
   assign m_axi_arsize  = 3'b010;
   assign m_axi_arburst = 2'b01;

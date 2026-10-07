@@ -12,6 +12,14 @@
 // master sees address and data accepted in either order and responses after
 // a varying wait, as with the real port.
 //
+// Plusargs (all optional):
+//   +AXI_MAX_DELAY=<n>  override MAX_DELAY at run time
+//   +AXI_RD_DELAY=<n>   fixed timing instead of random: addresses and write
+//   +AXI_WR_DELAY=<n>   data are accepted at once and the response follows
+//                       after exactly n cycles. Use both together, to mimic
+//                       a measured port (the ZC702's HP0 at 50 MHz behaves
+//                       like RD=11, WR=8 as seen through hp_axi_master).
+//
 // Backdoor access for testbenches: peek() and poke() take byte addresses.
 // fault_en/fault_addr flip one bit of the data read from one word, to check
 // that a memory test really detects errors.
@@ -76,8 +84,29 @@ module axi_ram_model #(
     mem[addr[31:2]] = data;
   endfunction
 
-  function automatic int unsigned rand_delay();
-    return (MAX_DELAY == 0) ? 0 : $urandom_range(MAX_DELAY);
+  int unsigned max_delay = MAX_DELAY;
+  int          rd_delay_fixed = -1;
+  int          wr_delay_fixed = -1;
+
+  initial begin
+    void'($value$plusargs("AXI_MAX_DELAY=%d", max_delay));
+    void'($value$plusargs("AXI_RD_DELAY=%d", rd_delay_fixed));
+    void'($value$plusargs("AXI_WR_DELAY=%d", wr_delay_fixed));
+  end
+
+  logic fixed_timing;
+  assign fixed_timing = (rd_delay_fixed >= 0) && (wr_delay_fixed >= 0);
+
+  // Delay before accepting an address or write data.
+  function automatic int unsigned accept_delay();
+    if (fixed_timing || max_delay == 0) return 0;
+    return $urandom_range(max_delay);
+  endfunction
+
+  // Delay before answering.
+  function automatic int unsigned response_delay(input logic is_write);
+    if (fixed_timing) return is_write ? wr_delay_fixed : rd_delay_fixed;
+    return (max_delay == 0) ? 0 : $urandom_range(max_delay);
   endfunction
 
   // ---------------------------------------------------------------------
@@ -99,7 +128,7 @@ module axi_ram_model #(
       w_got_q      <= 1'b0;
       aw_wait_q    <= 0;
       w_wait_q     <= 0;
-      b_wait_q     <= 0;
+      b_wait_q     <= (wr_delay_fixed >= 0) ? wr_delay_fixed : 0;
       s_axi_bvalid <= 1'b0;
       s_axi_bid    <= '0;
     end else begin
@@ -136,9 +165,9 @@ module axi_ram_model #(
         s_axi_bvalid <= 1'b0;
         aw_got_q     <= 1'b0;
         w_got_q      <= 1'b0;
-        aw_wait_q    <= rand_delay();
-        w_wait_q     <= rand_delay();
-        b_wait_q     <= rand_delay();
+        aw_wait_q    <= accept_delay();
+        w_wait_q     <= accept_delay();
+        b_wait_q     <= response_delay(1'b1);
       end
     end
   end
@@ -159,7 +188,7 @@ module axi_ram_model #(
     if (!rst_n) begin
       ar_got_q     <= 1'b0;
       ar_wait_q    <= 0;
-      r_wait_q     <= 0;
+      r_wait_q     <= (rd_delay_fixed >= 0) ? rd_delay_fixed : 0;
       s_axi_rvalid <= 1'b0;
       s_axi_rid    <= '0;
       s_axi_rdata  <= '0;
@@ -188,8 +217,8 @@ module axi_ram_model #(
       if (s_axi_rvalid && s_axi_rready) begin
         s_axi_rvalid <= 1'b0;
         ar_got_q     <= 1'b0;
-        ar_wait_q    <= rand_delay();
-        r_wait_q     <= rand_delay();
+        ar_wait_q    <= accept_delay();
+        r_wait_q     <= response_delay(1'b0);
       end
     end
   end

@@ -1,34 +1,49 @@
 // =============================================================================
-// fpga/zc702/ddr_test/ddr_test_top.sv
+// fpga/zc702/rtl/fpga_top_ddr.sv
 // =============================================================================
-// Milestone 2, step 2 board top for the ZC702: the DDR test logic
-// (ddr_test_core) driving the Zynq PS's S_AXI_HP0 port through hp_axi_master.
-// No CPU. Proves the PL can use PS DDR as memory and measures how long each
-// access takes, before the core is put on top of it.
+// Milestone 2 board top for the ZC702 (xc7z020clg484-1): soc_top running out
+// of the Zynq PS's DDR, which is what gives it the 64 MiB of RAM a Linux boot
+// needs. fpga_top.sv (milestone 1, everything in block RAM) stays as it is.
 //
-// The PL clock, reset synchronizer and UART TX pin are the ones proven by the
-// earlier milestones. New here is the PS, instantiated through the generated
-// block-design wrapper (see fpga/zc702/bd/ps7.tcl):
-//   - DDR and MIO pins pass straight through to the top level.
-//   - fclk_reset0_n stays low until the PS has been initialized over JTAG
-//     (ps7_init + ps7_post_config). The test logic is held in reset until
-//     then, because before that the DDR controller is not running and the
-//     PL-PS level shifters are off, so no AXI access could complete.
+// Everything interesting is in soc_ddr.sv (SoC + memory bridge + AXI master);
+// this file only adds what needs the device: the PL clock, the reset sources
+// and the PS, instantiated through the generated block-design wrapper (see
+// fpga/zc702/bd/ps7.tcl). The PS contributes its DDR controller behind
+// S_AXI_HP0 and one reset line; its ARM cores run no software.
 //
-// LEDs: DS15 heartbeat (PL clock alive), DS16 on while the test is running
-// (PS initialized), DS17 on once any pass has failed.
+// Memory as the core sees it:
+//   0x0000_0000  4 KiB boot RAM, loaded from boot.mem (fpga/zc702/sw/boot/)
+//   0x8000_0000  64 MiB main RAM = PS DDR 0x1000_0000..0x13FF_FFFF, filled
+//                over JTAG before the core is released (scripts/run_ddr.tcl)
+//
+// Reset: the SoC is held in reset while the PS keeps fclk_reset0_n low, that
+// is until the PS has been initialized over JTAG (ps7_init + ps7_post_config;
+// before that DDR does not work), and while SW5 is pressed. Both are "safe"
+// reset requests in soc_ddr's sense. Only the MMCM losing lock is a hard
+// reset.
+//
+// LEDs: DS15 heartbeat (PL clock alive), DS16 on while the SoC is running,
+// DS17 on once any DDR access has returned an error.
+//
+// The clock frequency here must match CLK_HZ in the sw/ build scripts, which
+// derive the UART baud divisor from it.
 // =============================================================================
 
 `timescale 1ns / 1ps
 
-module ddr_test_top (
+module fpga_top_ddr #(
+    // Resolved relative to the directory Vivado synthesis runs in;
+    // build_ddr.tcl changes into fpga/zc702/build/ before synth_design.
+    parameter BOOT_INIT_FILE = "boot.mem"
+) (
     input  logic sys_clk_p,    // 200 MHz LVDS system clock (U43)
     input  logic sys_clk_n,
     input  logic btn_rst,      // SW5 (left pushbutton), active high
+    input  logic uart_rx_pin,  // from USB-UART TXD (J63.3)
     output logic uart_tx_pin,  // to USB-UART RXD (J63.1)
     output logic led_alive,    // DS15
     output logic led_running,  // DS16
-    output logic led_fail,     // DS17
+    output logic led_error,    // DS17
 
     // Zynq PS pins (fixed locations, handled by the PS7 block)
     inout wire [14:0] DDR_addr,
@@ -86,44 +101,24 @@ module ddr_test_top (
   );
 
   // ---------------------------------------------------------------------
-  // Reset: asynchronous assert (button, MMCM unlock, or PS not initialized),
-  // synchronous release.
+  // Hard reset: asynchronous assert on MMCM unlock, synchronous release.
   // ---------------------------------------------------------------------
-  logic       fclk_reset0_n;
   logic [3:0] rst_sr;
-  logic       arst_n;
-  logic       rst_n;
+  logic       hard_rst_n;
 
-  assign arst_n = locked & ~btn_rst & fclk_reset0_n;
-
-  always_ff @(posedge clk or negedge arst_n) begin
-    if (!arst_n) rst_sr <= '0;
+  always_ff @(posedge clk or negedge locked) begin
+    if (!locked) rst_sr <= '0;
     else rst_sr <= {rst_sr[2:0], 1'b1};
   end
 
-  assign rst_n = rst_sr[3];
+  assign hard_rst_n = rst_sr[3];
 
   // ---------------------------------------------------------------------
-  // Test logic and AXI master.
+  // SoC on DDR.
   // ---------------------------------------------------------------------
-  logic        req_valid, req_write, req_done, req_error;
-  logic [31:0] req_addr, req_wdata, req_rdata;
-  logic [ 3:0] req_wstrb;
-
-  ddr_test_core u_core (
-      .clk        (clk),
-      .rst_n      (rst_n),
-      .req_valid  (req_valid),
-      .req_write  (req_write),
-      .req_addr   (req_addr),
-      .req_wdata  (req_wdata),
-      .req_wstrb  (req_wstrb),
-      .req_done   (req_done),
-      .req_rdata  (req_rdata),
-      .req_error  (req_error),
-      .uart_tx    (uart_tx_pin),
-      .fail_sticky(led_fail)
-  );
+  logic fclk_reset0_n;
+  logic rst_req;
+  assign rst_req = btn_rst | ~fclk_reset0_n;
 
   logic [5:0] awid, wid, bid, arid, rid;
   logic [31:0] awaddr, wdata, araddr, rdata;
@@ -133,18 +128,16 @@ module ddr_test_top (
   logic awvalid, awready, wlast, wvalid, wready, bvalid, bready;
   logic arvalid, arready, rlast, rvalid, rready;
 
-  hp_axi_master u_master (
+  soc_ddr #(
+      .BOOT_INIT_FILE(BOOT_INIT_FILE)
+  ) u_soc_ddr (
       .clk          (clk),
-      .rst_n        (rst_n),
-      .req_valid    (req_valid),
-      .req_write    (req_write),
-      .req_addr     (req_addr),
-      .req_wdata    (req_wdata),
-      .req_wstrb    (req_wstrb),
-      .req_done     (req_done),
-      .req_rdata    (req_rdata),
-      .req_error    (req_error),
-      .busy         (),
+      .hard_rst_n   (hard_rst_n),
+      .rst_req      (rst_req),
+      .uart_tx      (uart_tx_pin),
+      .uart_rx      (uart_rx_pin),
+      .running      (led_running),
+      .bus_error    (led_error),
       .m_axi_awid   (awid),
       .m_axi_awaddr (awaddr),
       .m_axi_awlen  (awlen),
@@ -253,13 +246,12 @@ module ddr_test_top (
   );
 
   // ---------------------------------------------------------------------
-  // LEDs.
+  // Heartbeat: toggles every 2^25 cycles (~0.67 s) while clk is running.
   // ---------------------------------------------------------------------
   logic [25:0] hb_q = '0;
 
   always_ff @(posedge clk) hb_q <= hb_q + 26'd1;
 
-  assign led_alive   = hb_q[25];
-  assign led_running = rst_n;
+  assign led_alive = hb_q[25];
 
 endmodule

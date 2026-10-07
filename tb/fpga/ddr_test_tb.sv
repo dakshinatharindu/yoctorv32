@@ -79,6 +79,7 @@ module ddr_test_tb;
       .req_done     (req_done),
       .req_rdata    (req_rdata),
       .req_error    (req_error),
+      .busy         (),
       .m_axi_awid   (awid),
       .m_axi_awaddr (awaddr),
       .m_axi_awlen  (awlen),
