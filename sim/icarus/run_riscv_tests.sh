@@ -16,6 +16,10 @@
 # Usage:
 #   sim/icarus/run_riscv_tests.sh                # run every manifested test
 #
+# Extra simulator plusargs can be passed through SIM_ARGS, e.g. to hold the
+# core's clock enable low at random (see the testbench):
+#   SIM_ARGS=+CE_FUZZ=3 sim/icarus/run_riscv_tests.sh
+#
 # Run from the project root.
 # ==========================================================
 
@@ -100,7 +104,7 @@ run_one() {
 
     echo "---- ${ext}-p-${name} ----"
     RUN_COUNT=$((RUN_COUNT + 1))
-    if ! vvp "$BIN" +HEXFILE="$hex" +TOHOST_ADDR=$TOHOST_ADDR; then
+    if ! vvp "$BIN" +HEXFILE="$hex" +TOHOST_ADDR=$TOHOST_ADDR ${SIM_ARGS:-}; then
         FAIL=1
     fi
 }

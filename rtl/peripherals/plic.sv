@@ -27,6 +27,7 @@
 module plic (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see soc_top.sv)
 
     input core_pkg::xlen_t addr,
     input core_pkg::xlen_t wdata,
@@ -86,7 +87,7 @@ module plic (
       threshold_q  <= '0;
       enable_1_q   <= 1'b0;
       claimed_q    <= 1'b0;
-    end else begin
+    end else if (ce) begin
       if (write_priority1) priority_1_q <= wdata;
       if (write_enable0) enable_1_q <= wdata[1];
       if (write_threshold) threshold_q <= wdata;
@@ -112,7 +113,7 @@ module plic (
   end
 
   always_ff @(posedge clk) begin
-    if (re) rdata <= rdata_next;
+    if (ce && re) rdata <= rdata_next;
   end
 
 endmodule

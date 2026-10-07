@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjemalloc-dev \
     numactl \
     gtkwave \
+    device-tree-compiler \
  && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------------------
@@ -79,3 +80,29 @@ RUN git clone https://github.com/riscv-collab/riscv-gnu-toolchain /tmp/riscv-gnu
  && make -j"$(nproc)" \
  && rm -rf /tmp/riscv-gnu-toolchain
 ENV PATH="/opt/riscv/bin:${PATH}"
+
+# ------------------------------------------------------------------
+# Xilinx tools (Vivado, xsdb, ...) are NOT installed in this image: the
+# host's existing install is bind-mounted in by devcontainer.json at
+# $XILINX_ROOT. This section only adds what is needed to run them from
+# here: a few runtime libraries the base image lacks, a serial terminal,
+# USB/serial access for the vscode user, and launcher commands on PATH
+# (see .devcontainer/xilinx-tool).
+#
+# Kept at the end of the file so the long toolchain builds above stay
+# cached when this section changes.
+# ------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libxtst6 \
+    libncurses6 \
+    libusb-1.0-0 \
+    usbutils \
+    picocom \
+ && rm -rf /var/lib/apt/lists/* \
+ && usermod -aG dialout,plugdev vscode
+
+COPY .devcontainer/xilinx-tool /usr/local/bin/xilinx-tool
+RUN chmod 755 /usr/local/bin/xilinx-tool \
+ && for t in vivado xsdb hw_server bootgen updatemem; do \
+        ln -s xilinx-tool /usr/local/bin/$t; \
+    done

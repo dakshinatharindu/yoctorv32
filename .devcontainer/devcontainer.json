@@ -1,10 +1,24 @@
 {
-  "name": "yoctorv32 (Verilator + RV32IMA toolchain)",
+  "name": "yoctorv32",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
   },
   "remoteUser": "vscode",
+  // FPGA work from inside the container: the host's Xilinx install is
+  // mounted read-only at the same path it has on the host
+  // (~/apps/Xilinx), and the host's /dev is shared so the JTAG cable and
+  // the USB-UART adapter are visible, including after a replug. The
+  // Dockerfile puts vivado, xsdb, ... on PATH (see xilinx-tool).
+  "containerEnv": {
+    "XILINX_ROOT": "${localEnv:HOME}/apps/Xilinx"
+  },
+  "runArgs": [
+    "--network=host",
+    "--privileged",
+    "--volume=/dev:/dev",
+    "--volume=${localEnv:HOME}/apps/Xilinx:${localEnv:HOME}/apps/Xilinx:ro"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [

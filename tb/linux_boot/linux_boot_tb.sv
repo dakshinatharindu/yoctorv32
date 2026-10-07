@@ -48,6 +48,20 @@ module linux_boot_tb;
 
   always #5 clk = ~clk;
 
+  // ---------------------------------------------------------------------
+  // Clock enable. Normally held at 1, which is how these tests have always
+  // run. +CE_FUZZ=<n> (n >= 2) instead raises it on a random ~1/n of clock
+  // cycles, standing in for a memory that takes a variable number of cycles
+  // to answer (the FPGA's DDR bridge). The DUT and the memory model below
+  // then only advance on enabled cycles, so the kernel must still boot.
+  // MAX_CYCLES and the progress log count enabled cycles. The UART (and
+  // this testbench's monitor/injector) keep real-time baud timing either way.
+  // ---------------------------------------------------------------------
+  int   ce_fuzz;
+  logic ce = 1'b1;
+
+  always_ff @(posedge clk) ce <= (ce_fuzz < 2) || ($urandom_range(ce_fuzz - 1) == 0);
+
   logic [7:0] boot_rom[0:BootRomBytes-1];
   // 0-based, not [RamBase:RamBase+RamBytes-1] — Verilator's $readmemh
   // bounds-checking did not accept 0x8000_0000-magnitude array bounds in
@@ -66,6 +80,7 @@ module linux_boot_tb;
   soc_top dut (
       .clk       (clk),
       .rst_n     (rst_n),
+      .ce        (ce),
       .imem_addr (imem_addr),
       .imem_rdata(imem_rdata),
       .dmem_addr (dmem_addr),
@@ -144,13 +159,17 @@ module linux_boot_tb;
     end
   endfunction
 
+  // Reads also run throughout reset regardless of ce: the core's first
+  // enabled cycle already consumes the instruction at RESET_PC.
   always_ff @(posedge clk) begin
-    imem_rdata <= read_mem(imem_addr);
-    dmem_rdata <= read_mem(dmem_addr);
+    if (ce || !rst_n) begin
+      imem_rdata <= read_mem(imem_addr);
+      dmem_rdata <= read_mem(dmem_addr);
+    end
   end
 
   always_ff @(posedge clk) begin
-    if (rst_n && (|dmem_wstrb)) begin
+    if (rst_n && ce && (|dmem_wstrb)) begin
       if (dmem_addr < BootRomBytes) begin
         if (dmem_wstrb[0]) boot_rom[dmem_addr+0] <= dmem_wdata[7:0];
         if (dmem_wstrb[1]) boot_rom[dmem_addr+1] <= dmem_wdata[15:8];
@@ -211,6 +230,9 @@ module linux_boot_tb;
   // RTL bug. Keeping them on separate fds keeps the console output clean.
   initial begin
     cyc = 0;
+    if (!$value$plusargs("CE_FUZZ=%d", ce_fuzz)) begin
+      ce_fuzz = 0;
+    end
     host_uart_rx_init();
     progress_fd = $fopen("linux_boot_progress.log", "w");
 
@@ -243,11 +265,13 @@ module linux_boot_tb;
 
     while (cyc < max_cycles) begin
       @(posedge clk);
-      cyc++;
-      if (cyc % 5000000 == 0) begin
-        $fdisplay(progress_fd, "linux_boot_tb: cyc=%0d imem_addr=%08h dmem_addr=%08h uart_bytes=%0d",
-                  cyc, imem_addr, dmem_addr, uart_byte_count);
-        $fflush(progress_fd);
+      if (ce) begin
+        cyc++;
+        if (cyc % 5000000 == 0) begin
+          $fdisplay(progress_fd, "linux_boot_tb: cyc=%0d imem_addr=%08h dmem_addr=%08h uart_bytes=%0d",
+                    cyc, imem_addr, dmem_addr, uart_byte_count);
+          $fflush(progress_fd);
+        end
       end
     end
 

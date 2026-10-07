@@ -43,6 +43,7 @@
 module ifetch (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     // Pipeline control
     input logic             stall,          // hold PC (load-use hazard)
@@ -69,17 +70,20 @@ module ifetch (
   logic  redirect_q;  // was a redirect taken on the previous cycle?
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) pc_q <= RESET_PC;
-    else if (sys_redirect) pc_q <= sys_redirect_target;
-    else if (branch_taken) pc_q <= branch_target;
-    else if (!stall) pc_q <= pc_q + 32'd4;
+    if (!rst_n) begin
+      pc_q <= RESET_PC;
+    end else if (ce) begin
+      if (sys_redirect) pc_q <= sys_redirect_target;
+      else if (branch_taken) pc_q <= branch_target;
+      else if (!stall) pc_q <= pc_q + 32'd4;
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       fetch_pc_q <= RESET_PC;
       redirect_q <= 1'b0;
-    end else begin
+    end else if (ce) begin
       fetch_pc_q <= pc_q;
       redirect_q <= branch_taken || sys_redirect;
     end

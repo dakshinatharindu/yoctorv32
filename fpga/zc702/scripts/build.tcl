@@ -27,9 +27,15 @@ if {![file exists $mem_file]} {
   error "missing $mem_file: run fpga/zc702/sw/hello/build.sh first"
 }
 
-# fpga_top.sv loads "hello.mem" by bare name, so run synthesis from the
-# directory that holds it.
-cd $out
+# fpga_top.sv loads "hello.mem" by bare name, so synthesis runs from a
+# directory that holds it. That directory is a scratch one with a copy of the
+# file: Vivado removes the init file from its working directory once synthesis
+# has read it, which would otherwise delete the build output itself.
+set run $out/vivado_run
+file mkdir $run
+file copy -force $mem_file $run/hello.mem
+set mem_copy $run/hello.mem
+cd $run
 
 # A $readmemh file that cannot be opened is only a critical warning by
 # default, which would leave the RAM empty without failing the build.
@@ -54,7 +60,7 @@ foreach line $lines {
 puts "Read $n_rtl RTL files from sim/verilator/rtl.f"
 
 read_verilog -sv $fpga/rtl/fpga_top.sv
-read_mem $mem_file
+read_mem $mem_copy
 read_xdc $fpga/constr/zc702.xdc
 
 # ---------------------------------------------------------------------------

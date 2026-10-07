@@ -23,6 +23,20 @@ module core_top (
     input logic clk,
     input logic rst_n,
 
+    // Clock enable. Every register in the core updates only on clock edges
+    // where ce is 1; while it is 0 the whole core holds its state and its
+    // imem_*/dmem_* outputs stay stable. The memory must follow the same
+    // rule (only register read data / apply writes on ce edges), so that
+    // from the core's point of view it still has exactly 1 cycle of latency:
+    // on an enabled edge the core samples the data for the addresses of its
+    // previous enabled cycle, and the data for the addresses it presents now
+    // must only appear after that edge.
+    // The one thing the memory must do on its own is read imem_addr (which
+    // sits at RESET_PC) before the first enabled cycle after reset, because
+    // that cycle already consumes the instruction.
+    // Tie to 1 when the memory really does answer every cycle.
+    input logic ce,
+
     // Instruction memory port
     output core_pkg::xlen_t imem_addr,
     input  core_pkg::xlen_t imem_rdata,
@@ -57,6 +71,7 @@ module core_top (
   ifetch u_ifetch (
       .clk                 (clk),
       .rst_n               (rst_n),
+      .ce                  (ce),
       .stall               (pc_stall),
       .branch_taken        (branch_taken),
       .branch_target       (branch_target),
@@ -100,7 +115,7 @@ module core_top (
     if (!rst_n) begin
       if_id_stall_q  <= 1'b0;
       skid_pending_q <= 1'b0;
-    end else begin
+    end else if (ce) begin
       if_id_stall_q <= if_id_stall;
       if (if_id_stall && !if_id_stall_q) begin
         skid_q.pc      <= if_pc;
@@ -126,6 +141,7 @@ module core_top (
   if_id_reg u_if_id_reg (
       .clk  (clk),
       .rst_n(rst_n),
+      .ce   (ce),
       .stall(if_id_stall),
       .flush(if_id_flush),
       .d    (if_id_d),
@@ -205,6 +221,7 @@ module core_top (
   regfile u_regfile (
       .clk      (clk),
       .rst_n    (rst_n),
+      .ce       (ce),
       .rs1_addr (rs1_addr),
       .rs1_rdata(rs1_rdata),
       .rs2_addr (rs2_addr),
@@ -285,6 +302,7 @@ module core_top (
   id_ex_reg u_id_ex_reg (
       .clk  (clk),
       .rst_n(rst_n),
+      .ce   (ce),
       .stall(id_ex_stall),
       .flush(id_ex_flush),
       .d    (id_ex_d),
@@ -313,6 +331,7 @@ module core_top (
   execute_stage u_execute_stage (
       .clk           (clk),
       .rst_n         (rst_n),
+      .ce            (ce),
       .id_ex         (id_ex_q),
       .id_ex_flush   (id_ex_flush),
       .ex_mem_fwd_val(ex_mem_q.alu_result),
@@ -328,6 +347,7 @@ module core_top (
   ex_mem_reg u_ex_mem_reg (
       .clk  (clk),
       .rst_n(rst_n),
+      .ce   (ce),
       .stall(ex_mem_stall),
       .flush(ex_mem_flush),
       .d    (ex_mem_d),
@@ -343,6 +363,7 @@ module core_top (
   lsu u_lsu (
       .clk             (clk),
       .rst_n           (rst_n),
+      .ce              (ce),
       .addr            (ex_mem_q.alu_result),
       .wdata_in        (ex_mem_q.store_data),
       .mem_rd          (ex_mem_q.mem_rd),
@@ -367,6 +388,7 @@ module core_top (
   csr u_csr (
       .clk                 (clk),
       .rst_n               (rst_n),
+      .ce                  (ce),
       .pc                  (ex_mem_q.pc),
       .illegal_instr_in    (ex_mem_q.illegal_instr),
       .csr_en              (ex_mem_q.csr_en),
@@ -425,6 +447,7 @@ module core_top (
   mem_wb_reg u_mem_wb_reg (
       .clk  (clk),
       .rst_n(rst_n),
+      .ce   (ce),
       .d    (mem_wb_d),
       .q    (mem_wb_q)
   );

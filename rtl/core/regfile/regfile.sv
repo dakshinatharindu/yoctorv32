@@ -15,6 +15,7 @@
 module regfile (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     // Read port 1
     input  core_pkg::reg_addr_t rs1_addr,
@@ -59,7 +60,7 @@ module regfile (
       for (i = 0; i < 32; i++) begin
         regs[i] <= '0;
       end
-    end else begin
+    end else if (ce) begin
       // Enforce x0 hardwired to 0 (ignore writes to x0)
       if (rd_we && (rd_addr != '0)) begin
         regs[rd_addr] <= rd_wdata;

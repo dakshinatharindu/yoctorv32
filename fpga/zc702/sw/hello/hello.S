@@ -1,51 +1,34 @@
 // =============================================================================
 // fpga/zc702/sw/hello/hello.S
 // =============================================================================
-// Milestone 1 bare-metal program for the ZC702: programs the UART's baud
-// divisor, prints a banner, then echoes every received byte, all in polling
-// mode (no interrupts). Runs from the 64 KiB block RAM in fpga_top.sv, linked
-// at address 0 (core_pkg::RESET_PC).
+// Bare-metal test program for the ZC702: programs the UART's baud divisor,
+// prints a banner, then echoes every received byte, all in polling mode (no
+// interrupts). Built two ways by build.sh:
 //
-// The UART registers are word-spaced (reg-shift=2), see rtl/peripherals/
-// uart.sv. Its divisor resets to 0, so nothing is transmitted until DLL/DLM
-// are written. uart.sv's bit period is divisor * 16 clk cycles, giving
-// divisor = CLK_HZ / (16 * BAUD), rounded to nearest. CLK_HZ and BAUD come
-// from build.sh and must match the clock fpga_top.sv actually generates.
+//   hello.mem      milestone 1: linked at address 0 (core_pkg::RESET_PC), for
+//                  the 64 KiB block RAM in fpga_top.sv.
+//   hello_ddr.bin  milestone 2: built with -DDDR_IMAGE and linked at
+//                  0x80000000, to be loaded into PS DDR and started by the
+//                  boot program (sw/boot/boot.S). That build begins with a
+//                  jump over the image magic word the boot program checks
+//                  for, at the offset where a Linux kernel Image has it.
+//
+// UART details and the CLK_HZ/BAUD divisor calculation are in common/soc.h.
 // =============================================================================
 
-#ifndef CLK_HZ
-#define CLK_HZ 50000000
-#endif
-#ifndef BAUD
-#define BAUD 9600
-#endif
-
-#define UART_DIVISOR ((CLK_HZ + 8 * BAUD) / (16 * BAUD))
-
-#define UART_BASE 0x10000000
-#define UART_THR  0x00   // write: transmit holding; DLL while LCR.DLAB=1
-#define UART_RBR  0x00   // read:  receive buffer
-#define UART_DLM  0x04   // while LCR.DLAB=1
-#define UART_LCR  0x0C
-#define UART_LSR  0x14
-
-#define LSR_DR    0x01   // received byte available
-#define LSR_THRE  0x20   // transmit holding register empty
+#include "soc.h"
 
 .section .text.start
 .global _start
 _start:
-    li   sp, 0x10000         // top of the 64 KiB block RAM
+#ifdef DDR_IMAGE
+    j    start
+    .org IMAGE_MAGIC_OFFSET
+    .word IMAGE_MAGIC
+start:
+#endif
     li   s0, UART_BASE
-
-    li   t0, 0x83            // LCR: DLAB=1, 8 data bits / no parity / 1 stop
-    sw   t0, UART_LCR(s0)
-    li   t0, (UART_DIVISOR & 0xff)
-    sw   t0, UART_THR(s0)    // DLL
-    li   t0, ((UART_DIVISOR >> 8) & 0xff)
-    sw   t0, UART_DLM(s0)    // DLM
-    li   t0, 0x03            // LCR: DLAB=0, 8N1
-    sw   t0, UART_LCR(s0)
+    uart_init s0, t0
 
     la   s1, banner
     jal  ra, puts
@@ -85,4 +68,8 @@ putc:
 
 .section .rodata
 banner:
+#ifdef DDR_IMAGE
+    .asciz "\r\nyoctorv32 on ZC702: running from DDR at 80000000\r\nType something, it will be echoed:\r\n"
+#else
     .asciz "\r\n\r\nyoctorv32 on ZC702: the RV32IMA core is alive\r\nType something, it will be echoed:\r\n"
+#endif

@@ -13,6 +13,10 @@
 #   sim/verilator/run_core_tests.sh                # run everything
 #   sim/verilator/run_core_tests.sh prog1.S prog2.S # run a subset
 #
+# Extra simulator plusargs can be passed through SIM_ARGS, e.g. to hold the
+# core's clock enable low at random (see the testbench):
+#   SIM_ARGS=+CE_FUZZ=3 sim/verilator/run_core_tests.sh
+#
 # Run from the project root.
 # ==========================================================
 
@@ -62,7 +66,7 @@ FAIL=0
 for SRC in "${PROGS[@]}"; do
     HEX=$(sim/verilator/build_prog.sh "$SRC" "$PROG_OUT")
     echo "---- $SRC ----"
-    if ! "$BIN" +HEXFILE="$HEX"; then
+    if ! "$BIN" +HEXFILE="$HEX" ${SIM_ARGS:-}; then
         FAIL=1
     fi
 done

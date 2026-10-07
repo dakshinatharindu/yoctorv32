@@ -17,6 +17,7 @@
 module ex_mem_reg (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     input logic stall,
     input logic flush,
@@ -26,8 +27,12 @@ module ex_mem_reg (
 );
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n || flush) q <= '0;
-    else if (!stall) q <= d;
+    if (!rst_n) begin
+      q <= '0;
+    end else if (ce) begin
+      if (flush) q <= '0;
+      else if (!stall) q <= d;
+    end
   end
 
 endmodule

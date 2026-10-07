@@ -72,6 +72,19 @@ Test programs report their result by storing to a `tohost` address (see [tb/core
 
 To add one, drop a `.S` file into either directory; the runner scripts pick up every `*.S` automatically. `sim/verilator/build_prog.sh` assembles a single program to a hex file if you want to drive the testbench by hand.
 
+### Clock-enable fuzzing
+
+`core_top` and `soc_top` take a clock enable, `ce`, which lets a memory slower than one cycle hold the whole SoC (see [Components](#components)). The testbenches normally tie it high. `+CE_FUZZ=<n>` raises it on a random ~1/`n` of clock cycles instead, and every test must still pass:
+
+```bash
+SIM_ARGS=+CE_FUZZ=3 sim/verilator/run_core_tests.sh
+SIM_ARGS=+CE_FUZZ=3 sim/verilator/run_soc_tests.sh
+SIM_ARGS=+CE_FUZZ=3 sim/verilator/run_riscv_tests.sh
+sim/verilator/run_linux_boot.sh +CE_FUZZ=3
+```
+
+`SIM_ARGS` passes any extra plusargs through to the simulator, so `SIM_ARGS="+CE_FUZZ=3 +verilator+seed+7"` selects a different random pattern. Cycle counts and limits are in enabled cycles.
+
 ---
 
 ## Booting Linux
@@ -85,6 +98,7 @@ The script compiles [tb/linux_boot/yoctorv32.dts](tb/linux_boot/yoctorv32.dts), 
 | Plusarg | Description |
 |---|---|
 | `+MAX_CYCLES=<n>` | Stop after `n` clock cycles (default: `200000000`) |
+| `+CE_FUZZ=<n>` | Enable the SoC on a random ~1/`n` of clock cycles (see [Clock-enable fuzzing](#clock-enable-fuzzing)); the run takes about `n` times longer |
 
 The kernel reaches `buildroot login:` after roughly 145M cycles, which takes about 1–2 minutes of wall time for the Verilator model. Log in as `root` with no password.
 
@@ -184,7 +198,7 @@ The peripheral bases match remu. The boot ROM and RAM are testbench memory model
 
 ### Components
 
-**`core_top`** — the CPU, with external instruction and data memory ports and `mtip`/`meip` inputs. It has no knowledge of the memory map, so it can be tested alone against a flat memory (`core_tb`).
+**`core_top`** — the CPU, with external instruction and data memory ports and `mtip`/`meip` inputs. It has no knowledge of the memory map, so it can be tested alone against a flat memory (`core_tb`). Its `ce` input is a clock enable on every register: while it is low the core holds all state and keeps its memory outputs stable, so a memory that needs several cycles can pause the core and still look like the 1-cycle memory the pipeline assumes.
 
 **`data_bus`** — decodes the data port's address to RAM, CLINT, UART or PLIC and gates the other targets' read/write strobes. All targets have 1-cycle read latency, so only the returning read-data mux needs a registered select.
 
@@ -194,7 +208,7 @@ The peripheral bases match remu. The boot ROM and RAM are testbench memory model
 
 **`plic`** — one source (the UART's `irq`) and one context, at the offsets Linux's PLIC driver uses. Claiming a source masks it until software completes it.
 
-**`soc_top`** — wires `core_top`, `data_bus` and the three peripherals together. This is the module an FPGA top level will instantiate.
+**`soc_top`** — wires `core_top`, `data_bus` and the three peripherals together. This is the module an FPGA top level will instantiate. Its `ce` input reaches the core, the interconnect, the CLINT and the PLIC, so `mtime` counts enabled cycles. The UART applies it to register accesses only: its TX/RX shifters run on every clock, which keeps the baud rate in real time.
 
 ### Boot flow
 
