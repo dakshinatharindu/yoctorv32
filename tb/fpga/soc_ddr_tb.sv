@@ -20,8 +20,10 @@
 //                              PASS/FAIL like core_tb (riscv-tests)
 //   +FINISH_UART_BYTES=<n>     stop successfully once n UART bytes were
 //                              decoded since the last reset
+//   +FINISH_ON=<text>          stop successfully once the UART output ends
+//                              with this text (no spaces), e.g. login:
 //   +MAX_CYCLES=<n>            give up after n core cycles (ce pulses);
-//                              a TIMEOUT failure if either option above was
+//                              a TIMEOUT failure if any option above was
 //                              given, a normal stop otherwise
 //
 // Stimulus:
@@ -194,11 +196,20 @@ module soc_ddr_tb #(
   );
 
   int unsigned shown_count = 0;
+  string       finish_on;
+  string       uart_tail = "";
+  logic        finish_text_seen = 1'b0;
   always_ff @(posedge clk) begin
     if (uart_byte_count != shown_count) begin
       $write("%c", uart_bytes[shown_count]);
       $fflush;
       shown_count <= shown_count + 1;
+      if (finish_on.len() > 0) begin
+        uart_tail = {uart_tail, string'(uart_bytes[shown_count])};
+        if (uart_tail.len() > finish_on.len())
+          uart_tail = uart_tail.substr(uart_tail.len() - finish_on.len(), uart_tail.len() - 1);
+        if (uart_tail == finish_on) finish_text_seen <= 1'b1;
+      end
     end
   end
 
@@ -244,7 +255,9 @@ module soc_ddr_tb #(
   // ---------------------------------------------------------------------
   // Load + run.
   // ---------------------------------------------------------------------
-  logic [7:0] img[0:RamBytes-1];
+  // Bit 8 marks a byte that no image file has set, so that exactly the bytes
+  // of the files are written to DDR, zeros included, like a JTAG download.
+  logic [8:0] img[0:RamBytes-1];
 
   string boot_file, ddr_file;
   longint max_cycles;
@@ -272,6 +285,7 @@ module soc_ddr_tb #(
     use_tohost = $value$plusargs("TOHOST_ADDR=%h", tohost_addr);
     if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = MaxCyclesDefault;
     if (!$value$plusargs("FINISH_UART_BYTES=%d", finish_uart_bytes)) finish_uart_bytes = 0;
+    if (!$value$plusargs("FINISH_ON=%s", finish_on)) finish_on = "";
     if (!$value$plusargs("INJECT_AT_BYTES=%d", inject_at_bytes)) inject_at_bytes = 0;
     if (!$value$plusargs("INJECT_BYTE=%h", inject_byte_arg)) inject_byte_arg = 32'h5A;
     if (!$value$plusargs("RESET_COUNT=%d", reset_count)) reset_count = 0;
@@ -287,13 +301,17 @@ module soc_ddr_tb #(
       $fatal(1, "soc_ddr_tb: missing +BOOT=<file> plusarg");
     end
 
-    // Main RAM images -> the model's DDR, as the JTAG download does.
-    for (int i = 0; i < RamBytes; i++) img[i] = 8'h00;
+    // Main RAM images -> the model's DDR, as the JTAG download does. Bytes
+    // of a word that no file covers keep whatever DDR held before.
+    for (int i = 0; i < RamBytes; i++) img[i] = 9'h100;
     if ($value$plusargs("DDR0=%s", ddr_file)) $readmemh(ddr_file, img);
     if ($value$plusargs("DDR1=%s", ddr_file)) $readmemh(ddr_file, img);
     for (int i = 0; i < RamBytes; i += 4) begin
-      if ({img[i+3], img[i+2], img[i+1], img[i]} != 32'h0)
-        u_ram.poke(DdrBase + i, {img[i+3], img[i+2], img[i+1], img[i]});
+      if (!(img[i][8] && img[i+1][8] && img[i+2][8] && img[i+3][8])) begin
+        automatic logic [31:0] word = u_ram.peek(DdrBase + i);
+        for (int b = 0; b < 4; b++) if (!img[i+b][8]) word[8*b+:8] = img[i+b][7:0];
+        u_ram.poke(DdrBase + i, word);
+      end
     end
 
     progress_fd = $fopen("soc_ddr_progress.log", "w");
@@ -347,8 +365,13 @@ module soc_ddr_tb #(
         report_and_finish("PASS", 1'b1);
       end
 
+      if (finish_text_seen) begin
+        repeat (12 * UART_BIT_CYCLES) @(posedge clk);
+        report_and_finish("PASS", 1'b1);
+      end
+
       if (core_cycles >= max_cycles) begin
-        if (use_tohost || finish_uart_bytes > 0) report_and_finish("TIMEOUT", 1'b0);
+        if (use_tohost || finish_uart_bytes > 0 || finish_on.len() > 0) report_and_finish("TIMEOUT", 1'b0);
         else report_and_finish("stopped", 1'b1);
       end
     end

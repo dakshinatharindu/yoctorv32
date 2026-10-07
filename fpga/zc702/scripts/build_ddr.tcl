@@ -32,9 +32,15 @@ if {![file exists $mem_file]} {
   error "missing $mem_file: run fpga/zc702/sw/boot/build.sh first"
 }
 
-# fpga_top_ddr.sv loads "boot.mem" by bare name, so run synthesis from the
-# directory that holds it.
-cd $out
+# fpga_top_ddr.sv loads "boot.mem" by bare name, so synthesis runs from a
+# directory that holds it. That directory is a scratch one with a copy of the
+# file: Vivado removes the init file from its working directory once synthesis
+# has read it, which would otherwise delete the build output itself.
+set run $out/vivado_run
+file mkdir $run
+file copy -force $mem_file $run/boot.mem
+set mem_copy $run/boot.mem
+cd $run
 
 # A $readmemh file that cannot be opened is only a critical warning by
 # default, which would leave the boot RAM empty without failing the build.
@@ -68,7 +74,7 @@ add_files -norecurse [list \
     $fpga/rtl/mem_bridge.sv \
     $fpga/rtl/soc_ddr.sv \
     $fpga/rtl/fpga_top_ddr.sv \
-    $mem_file \
+    $mem_copy \
 ]
 add_files -fileset constrs_1 -norecurse $fpga/constr/zc702_ddr.xdc
 set_property top fpga_top_ddr [current_fileset]

@@ -13,6 +13,7 @@
 // a varying wait, as with the real port.
 //
 // Plusargs (all optional):
+//   +DDR_GARBAGE        unwritten words read as junk rather than zero
 //   +AXI_MAX_DELAY=<n>  override MAX_DELAY at run time
 //   +AXI_RD_DELAY=<n>   fixed timing instead of random: addresses and write
 //   +AXI_WR_DELAY=<n>   data are accepted at once and the response follows
@@ -76,8 +77,15 @@ module axi_ram_model #(
   // Sparse memory, indexed by word address.
   logic [31:0] mem[logic [29:0]];
 
+  // +DDR_GARBAGE: words never written read as address-dependent junk instead
+  // of zero, like real DDR that was never cleared. Catches software that
+  // only works on zeroed memory.
+  logic garbage = 1'b0;
+  initial garbage = $test$plusargs("DDR_GARBAGE");
+
   function automatic logic [31:0] peek(input logic [31:0] addr);
-    return mem.exists(addr[31:2]) ? mem[addr[31:2]] : 32'h0;
+    if (mem.exists(addr[31:2])) return mem[addr[31:2]];
+    return garbage ? (({2'b0, addr[31:2]} * 32'd2654435761) ^ 32'hA5A5_5A5A) : 32'h0;
   endfunction
 
   function automatic void poke(input logic [31:0] addr, input logic [31:0] data);

@@ -1,0 +1,127 @@
+/dts-v1/;
+
+/*
+ * fpga/zc702/linux/yoctorv32_zc702.dts
+ *
+ * Device tree for yoctorv32 on the ZC702 (fpga_top_ddr): the simulation's
+ * tb/linux_boot/yoctorv32.dts with the console settings changed to what the
+ * board has. Everything else, and the reasoning in the comments below, is
+ * unchanged. Differences:
+ *   - UART clock-frequency is the FPGA's 50 MHz core clock. The UART's baud
+ *     generator runs on every clock, so this is a real-time frequency.
+ *   - Console and earlycon at 9600 baud: the Pmod header the UART uses
+ *     cannot carry much more.
+ * timebase-frequency stays at the simulation's value on purpose: mtime
+ * counts the core's own cycles, not wall-clock time, and the core runs at
+ * about 2 MHz on the board (every cycle waits for DDR). Linux therefore
+ * boots exactly as in simulation, but its clock runs roughly 5x slow.
+ */
+
+/ {
+	#address-cells = <0x02>;
+	#size-cells = <0x02>;
+	compatible = "riscv-minimal-nommu";
+	model = "yoctorv32,soc";
+
+	chosen {
+		bootargs = "earlycon console=ttyS0,9600";
+		stdout-path = "/soc/uart@10000000:9600";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x00 0x80000000 0x00 0x4000000>;
+	};
+
+	cpus {
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		// 12 MHz. clint.sv's mtime ticks once per clk, so this only sets
+		// how many cycles Linux treats as one second: with HZ=250 a
+		// jiffy is 48,000 cycles. Each timer tick costs ~3,700 cycles
+		// here, so lower values drown the boot in tick overhead
+		// (measured cycles to login prompt: 1.5 MHz 340M, 3 MHz 190M,
+		// 6 MHz 160M, 12 MHz 145M, 24 MHz 145M; 1 MHz livelocks).
+		timebase-frequency = <0xb71b00>;
+
+		cpu@0 {
+			phandle = <0x01>;
+			device_type = "cpu";
+			reg = <0x00>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv32ima";
+			mmu-type = "riscv,none";
+
+			interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+				phandle = <0x02>;
+			};
+		};
+
+		cpu-map {
+			cluster0 {
+				core0 {
+					cpu = <0x01>;
+				};
+			};
+		};
+	};
+
+	soc {
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		compatible = "simple-bus";
+		ranges;
+
+		// reg-shift=2: our uart.sv is word-spaced (each register its own
+		// 32-bit word), not the real 16550's byte-packed layout — see
+		// rtl/peripherals/uart.sv's header for why. No interrupt-parent/
+		// interrupts: this presents as polling-only (the in-tree 8250
+		// driver falls back to polling when a UART node has no
+		// interrupts property).
+		//
+		// compatible lists BOTH strings, matched independently by two
+		// different consumers:
+		//  - "ns16450" is listed first so the real platform driver
+		//    (8250_of.c's of_platform_serial_table) matches it first,
+		//    forcing port->type=PORT_16450 (fifo_size=1, tx_loadsz=1, no
+		//    UART_CAP_FIFO) — matching what this hardware actually is (a
+		//    single holding register, no FIFO; see uart.sv's header).
+		//    "ns16550a" would force PORT_16550A instead, which
+		//    unconditionally sets UART_CAP_FIFO/tx_loadsz=16 regardless of
+		//    our IIR/FCR readback — the panic/console emergency-write path
+		//    (serial8250_console_fifo_write) then blasts up to 16 bytes at
+		//    once with only one LSR.THRE check per batch, and most of
+		//    those bytes get silently dropped by uart.sv's
+		//    `thr_write && !tx_busy_q` guard, corrupting panic/oops output.
+		//  - "ns16550a" is listed second purely for earlycon: 8250_early.c
+		//    only registers OF_EARLYCON_DECLARE for "ns16550"/"ns16550a"
+		//    (no "ns16450" entry exists at all), and of_setup_earlycon
+		//    tries each compatible string in turn against that separate
+		//    table — "ns16450" alone left earlycon completely unmatched,
+		//    silently dropping every boot message before the platform
+		//    driver attaches (looked like a multi-hundred-million-cycle
+		//    hang: nothing printed until "Serial: 8250/16550 driver").
+		//    Each consumer picks the first string *it* recognizes, so
+		//    listing both here satisfies them independently.
+		uart@10000000 {
+			clock-frequency = <50000000>;
+			reg = <0x00 0x10000000 0x00 0x100>;
+			reg-shift = <0x02>;
+			reg-io-width = <0x04>;
+			compatible = "ns16450", "ns16550a";
+		};
+
+		// interrupts-extended targets the CPU's own local
+		// interrupt-controller (MTIP/MSIP), not a PLIC — matches
+		// rtl/peripherals/clint.sv as built, unmodified.
+		clint@11000000 {
+			interrupts-extended = <0x02 0x03 0x02 0x07>;
+			reg = <0x00 0x11000000 0x00 0x10000>;
+			compatible = "sifive,clint0\0riscv,clint0";
+		};
+	};
+};
