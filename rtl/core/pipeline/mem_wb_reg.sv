@@ -9,6 +9,7 @@
 module mem_wb_reg (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     input  core_pkg::mem_wb_t d,
     output core_pkg::mem_wb_t q
@@ -16,7 +17,7 @@ module mem_wb_reg (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) q <= '0;
-    else q <= d;
+    else if (ce) q <= d;
   end
 
 endmodule

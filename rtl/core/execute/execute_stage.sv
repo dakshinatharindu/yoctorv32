@@ -10,6 +10,7 @@
 module execute_stage (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     /* verilator lint_off UNUSEDSIGNAL */
     input core_pkg::id_ex_t id_ex,  // rs2_addr consumed outside this stage
@@ -112,6 +113,7 @@ module execute_stage (
   div_unit u_div_unit (
       .clk        (clk),
       .rst_n      (rst_n),
+      .ce         (ce),
       .flush      (id_ex_flush),
       .start      (div_start),
       .op         (id_ex.alu_op),

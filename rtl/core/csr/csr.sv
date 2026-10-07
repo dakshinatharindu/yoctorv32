@@ -56,6 +56,7 @@
 module csr (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     // Current MEM-stage instruction (from ex_mem_q)
     input core_pkg::xlen_t    pc,                // faulting/retiring instr's own PC
@@ -327,56 +328,58 @@ module csr (
       mtval_q        <= '0;
       for (int i = 0; i < 4; i++) pmpcfg_q[i] <= '0;
       for (int i = 0; i < 16; i++) pmpaddr_q[i] <= '0;
-    end else if (trap_taken) begin
-      mepc_q         <= {pc[31:2], 2'b00};
-      mcause_q       <= trap_cause;
-      mtval_q        <= trap_val;
-      mstatus_mpie_q <= mstatus_mie_q;
-      mstatus_mie_q  <= 1'b0;
-      // Save the privilege the trap interrupted, then traps always land in
-      // M-mode (no S-mode to delegate to).
-      mstatus_mpp_q  <= priv_m_q ? 2'b11 : 2'b00;
-      priv_m_q       <= 1'b1;
-    end else if (mret_taken) begin
-      mstatus_mie_q  <= mstatus_mpie_q;
-      mstatus_mpie_q <= 1'b1;
-      // Restore the privilege mret is returning to, then per the xRET spec
-      // MPP is reset to the least-privileged supported mode (U) — anything
-      // other than 2'b11 is treated as U, a safe default for a reserved/
-      // unsupported encoding (e.g. 2'b01/2'b10, S-mode/reserved, neither of
-      // which this core implements).
-      priv_m_q       <= (mstatus_mpp_q == 2'b11);
-      mstatus_mpp_q  <= 2'b00;
-    end else if (csr_write_en) begin
-      if (is_pmpcfg) begin
-        pmpcfg_q[csr_addr[1:0]] <= csr_new_value;
-      end else if (is_pmpaddr) begin
-        pmpaddr_q[csr_addr[3:0]] <= csr_new_value;
-      end else begin
-        unique case (csr_addr)
-          CsrMstatus: begin
-            mstatus_mie_q  <= csr_new_value[3];
-            mstatus_mpie_q <= csr_new_value[7];
-            // WARL: only M(2'b11)/U(2'b00) are legal MPP encodings on this
-            // core (no S-mode) — any other attempted value (S=2'b01,
-            // reserved=2'b10) must collapse to a supported one, not be
-            // stored verbatim. This isn't just spec pedantry: riscv-tests'
-            // own boilerplate (rv64mi/illegal.S) writes MPP=S and reads it
-            // back specifically to detect "is S-mode present," expecting
-            // the readback to NOT show S when it isn't — storing the raw
-            // value verbatim made that probe wrongly conclude S-mode was
-            // present and fall into test code exercising sstatus/satp/etc,
-            // which this core doesn't implement.
-            mstatus_mpp_q  <= (csr_new_value[12:11] == 2'b11) ? 2'b11 : 2'b00;
-          end
-          CsrMie:      mie_q      <= csr_new_value;
-          CsrMtvec:    mtvec_q    <= {csr_new_value[31:2], 2'b00};
-          CsrMscratch: mscratch_q <= csr_new_value;
-          CsrMepc:     mepc_q     <= {csr_new_value[31:2], 2'b00};
-          CsrMcause:   mcause_q   <= csr_new_value;
-          CsrMtval:    mtval_q    <= csr_new_value;
-          default:     ;  // misa/mip/mvendorid/marchid/mimpid/mhartid: no storage, no-op
-        endcase
+    end else if (ce) begin
+      if (trap_taken) begin
+        mepc_q         <= {pc[31:2], 2'b00};
+        mcause_q       <= trap_cause;
+        mtval_q        <= trap_val;
+        mstatus_mpie_q <= mstatus_mie_q;
+        mstatus_mie_q  <= 1'b0;
+        // Save the privilege the trap interrupted, then traps always land in
+        // M-mode (no S-mode to delegate to).
+        mstatus_mpp_q  <= priv_m_q ? 2'b11 : 2'b00;
+        priv_m_q       <= 1'b1;
+      end else if (mret_taken) begin
+        mstatus_mie_q  <= mstatus_mpie_q;
+        mstatus_mpie_q <= 1'b1;
+        // Restore the privilege mret is returning to, then per the xRET spec
+        // MPP is reset to the least-privileged supported mode (U) — anything
+        // other than 2'b11 is treated as U, a safe default for a reserved/
+        // unsupported encoding (e.g. 2'b01/2'b10, S-mode/reserved, neither of
+        // which this core implements).
+        priv_m_q       <= (mstatus_mpp_q == 2'b11);
+        mstatus_mpp_q  <= 2'b00;
+      end else if (csr_write_en) begin
+        if (is_pmpcfg) begin
+          pmpcfg_q[csr_addr[1:0]] <= csr_new_value;
+        end else if (is_pmpaddr) begin
+          pmpaddr_q[csr_addr[3:0]] <= csr_new_value;
+        end else begin
+          unique case (csr_addr)
+            CsrMstatus: begin
+              mstatus_mie_q  <= csr_new_value[3];
+              mstatus_mpie_q <= csr_new_value[7];
+              // WARL: only M(2'b11)/U(2'b00) are legal MPP encodings on this
+              // core (no S-mode) — any other attempted value (S=2'b01,
+              // reserved=2'b10) must collapse to a supported one, not be
+              // stored verbatim. This isn't just spec pedantry: riscv-tests'
+              // own boilerplate (rv64mi/illegal.S) writes MPP=S and reads it
+              // back specifically to detect "is S-mode present," expecting
+              // the readback to NOT show S when it isn't — storing the raw
+              // value verbatim made that probe wrongly conclude S-mode was
+              // present and fall into test code exercising sstatus/satp/etc,
+              // which this core doesn't implement.
+              mstatus_mpp_q  <= (csr_new_value[12:11] == 2'b11) ? 2'b11 : 2'b00;
+            end
+            CsrMie:      mie_q      <= csr_new_value;
+            CsrMtvec:    mtvec_q    <= {csr_new_value[31:2], 2'b00};
+            CsrMscratch: mscratch_q <= csr_new_value;
+            CsrMepc:     mepc_q     <= {csr_new_value[31:2], 2'b00};
+            CsrMcause:   mcause_q   <= csr_new_value;
+            CsrMtval:    mtval_q    <= csr_new_value;
+            default:     ;  // misa/mip/mvendorid/marchid/mimpid/mhartid: no storage, no-op
+          endcase
+        end
       end
     end
   end

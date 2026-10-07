@@ -20,6 +20,7 @@
 module div_unit (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     // Abort an in-flight divide (e.g. id_ex_q squashed by an older MEM-stage
     // trap) — without this, an abandoned divide keeps running in the
@@ -79,29 +80,34 @@ module div_unit (
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n || flush) begin
+    if (!rst_n) begin
       state_q <= ST_IDLE;
       cnt_q   <= '0;
-    end else if (state_q == ST_IDLE) begin
-      if (start) begin
-        dividend_orig_q <= dividend_in;
-        divzero_q       <= (divisor_in == '0);
-        ovf_q           <= is_signed_start && (dividend_in == 32'h8000_0000) &&
-            (divisor_in == 32'hFFFF_FFFF);
-        sign_quo_q <= is_signed_start && (dividend_in[XLEN-1] ^ divisor_in[XLEN-1]);
-        sign_rem_q <= is_signed_start && dividend_in[XLEN-1];
-        divd_q <= (is_signed_start && dividend_in[XLEN-1]) ? (~dividend_in + 1'b1) : dividend_in;
-        div_q <= (is_signed_start && divisor_in[XLEN-1]) ? (~divisor_in + 1'b1) : divisor_in;
-        rem_q   <= '0;
-        op_q    <= op;
+    end else if (ce) begin
+      if (flush) begin
+        state_q <= ST_IDLE;
         cnt_q   <= '0;
-        state_q <= ST_RUN;
+      end else if (state_q == ST_IDLE) begin
+        if (start) begin
+          dividend_orig_q <= dividend_in;
+          divzero_q       <= (divisor_in == '0);
+          ovf_q           <= is_signed_start && (dividend_in == 32'h8000_0000) &&
+              (divisor_in == 32'hFFFF_FFFF);
+          sign_quo_q <= is_signed_start && (dividend_in[XLEN-1] ^ divisor_in[XLEN-1]);
+          sign_rem_q <= is_signed_start && dividend_in[XLEN-1];
+          divd_q <= (is_signed_start && dividend_in[XLEN-1]) ? (~dividend_in + 1'b1) : dividend_in;
+          div_q <= (is_signed_start && divisor_in[XLEN-1]) ? (~divisor_in + 1'b1) : divisor_in;
+          rem_q   <= '0;
+          op_q    <= op;
+          cnt_q   <= '0;
+          state_q <= ST_RUN;
+        end
+      end else begin  // ST_RUN
+        rem_q  <= rem_nxt;
+        divd_q <= divd_nxt;
+        if (cnt_q == LastIter) state_q <= ST_IDLE;
+        else cnt_q <= cnt_q + 1'b1;
       end
-    end else begin  // ST_RUN
-      rem_q  <= rem_nxt;
-      divd_q <= divd_nxt;
-      if (cnt_q == LastIter) state_q <= ST_IDLE;
-      else cnt_q <= cnt_q + 1'b1;
     end
   end
 

@@ -49,6 +49,13 @@ module uart (
     input logic clk,
     input logic rst_n,
 
+    // Clock enable for the bus side only (see soc_top.sv): register reads
+    // and writes take effect only on cycles where ce is 1. The TX/RX
+    // shifters and their baud counters deliberately ignore it and run on
+    // every clk edge, so the baud rate stays tied to real time even while
+    // the core is held.
+    input logic ce,
+
     input core_pkg::xlen_t addr,
     input core_pkg::xlen_t wdata,
     input logic      [3:0] wstrb,
@@ -82,7 +89,7 @@ module uart (
   assign dlab = lcr_q[7];
 
   logic write_en;
-  assign write_en = |wstrb;
+  assign write_en = ce && (|wstrb);
 
   logic write_thr_dll, write_ier_dlm, write_lcr, write_mcr, write_scr;
   assign write_thr_dll = write_en && (off == OffThrRbrDll);
@@ -163,7 +170,7 @@ module uart (
   logic        lsr_dr_q;
 
   logic read_rbr;
-  assign read_rbr = re && !dlab && (off == OffThrRbrDll);
+  assign read_rbr = ce && re && !dlab && (off == OffThrRbrDll);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -275,7 +282,7 @@ module uart (
   end
 
   always_ff @(posedge clk) begin
-    if (re) rdata <= rdata_next;
+    if (ce && re) rdata <= rdata_next;
   end
 
 endmodule

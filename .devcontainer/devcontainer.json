@@ -1,5 +1,5 @@
 {
-  "name": "yoctorv32 (Verilator + RV32IMA toolchain)",
+  "name": "yoctorv32",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."

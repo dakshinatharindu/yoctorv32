@@ -35,6 +35,7 @@
 module lsu (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     input core_pkg::xlen_t     addr,      // byte address (alu_result)
     input core_pkg::xlen_t     wdata_in,  // store data (rs2, forwarded)
@@ -114,13 +115,15 @@ module lsu (
     if (!rst_n) begin
       resv_valid_q <= 1'b0;
       resv_addr_q  <= '0;
-    end else if (is_amo && amo_op == AMO_LR) begin
-      resv_valid_q <= 1'b1;
-      resv_addr_q  <= dmem_addr;
-    end else if (is_amo && amo_op == AMO_SC) begin
-      resv_valid_q <= 1'b0;
-    end else if (resv_valid_q && (mem_wr || amo_rmw_pending) && (dmem_addr == resv_addr_q)) begin
-      resv_valid_q <= 1'b0;
+    end else if (ce) begin
+      if (is_amo && amo_op == AMO_LR) begin
+        resv_valid_q <= 1'b1;
+        resv_addr_q  <= dmem_addr;
+      end else if (is_amo && amo_op == AMO_SC) begin
+        resv_valid_q <= 1'b0;
+      end else if (resv_valid_q && (mem_wr || amo_rmw_pending) && (dmem_addr == resv_addr_q)) begin
+        resv_valid_q <= 1'b0;
+      end
     end
   end
 
@@ -139,9 +142,12 @@ module lsu (
   logic amo_phase_q;
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) amo_phase_q <= 1'b0;
-    else if (amo_rmw_pending && !amo_phase_q) amo_phase_q <= 1'b1;
-    else amo_phase_q <= 1'b0;
+    if (!rst_n) begin
+      amo_phase_q <= 1'b0;
+    end else if (ce) begin
+      if (amo_rmw_pending && !amo_phase_q) amo_phase_q <= 1'b1;
+      else amo_phase_q <= 1'b0;
+    end
   end
 
   assign amo_stall = amo_rmw_pending && !amo_phase_q;

@@ -27,6 +27,7 @@ module data_bus #(
 ) (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see soc_top.sv)
 
     // CPU side (from core_top's dmem port)
     input  core_pkg::xlen_t cpu_addr,
@@ -103,11 +104,14 @@ module data_bus #(
 
   sel_e sel_q;
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) sel_q <= SEL_RAM;
-    else if (is_clint) sel_q <= SEL_CLINT;
-    else if (is_uart) sel_q <= SEL_UART;
-    else if (is_plic) sel_q <= SEL_PLIC;
-    else sel_q <= SEL_RAM;
+    if (!rst_n) begin
+      sel_q <= SEL_RAM;
+    end else if (ce) begin
+      if (is_clint) sel_q <= SEL_CLINT;
+      else if (is_uart) sel_q <= SEL_UART;
+      else if (is_plic) sel_q <= SEL_PLIC;
+      else sel_q <= SEL_RAM;
+    end
   end
 
   always_comb begin

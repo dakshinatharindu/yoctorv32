@@ -103,6 +103,7 @@ module fpga_top #(
   soc_top u_soc_top (
       .clk       (clk),
       .rst_n     (rst_n),
+      .ce        (1'b1),  // block RAM answers every cycle
       .imem_addr (imem_addr),
       .imem_rdata(imem_rdata),
       .dmem_addr (dmem_addr),

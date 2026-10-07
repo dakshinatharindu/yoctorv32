@@ -38,6 +38,20 @@ module core_tb;
 
   always #5 clk = ~clk;
 
+  // ---------------------------------------------------------------------
+  // Clock enable. Normally held at 1, which is how these tests have always
+  // run. +CE_FUZZ=<n> (n >= 2) instead raises it on a random ~1/n of clock
+  // cycles, standing in for a memory that takes a variable number of cycles
+  // to answer (the FPGA's DDR bridge). The DUT and the memory model below
+  // then only advance on enabled cycles, so every program must behave
+  // exactly as it does with ce held at 1. Cycle counts and limits in this
+  // testbench are in enabled cycles.
+  // ---------------------------------------------------------------------
+  int   ce_fuzz;
+  logic ce = 1'b1;
+
+  always_ff @(posedge clk) ce <= (ce_fuzz < 2) || ($urandom_range(ce_fuzz - 1) == 0);
+
   logic [7:0] mem[0:MEM_BYTES-1];
 
   xlen_t imem_addr, imem_rdata;
@@ -48,6 +62,7 @@ module core_tb;
   core_top dut (
       .clk       (clk),
       .rst_n     (rst_n),
+      .ce        (ce),
       .imem_addr (imem_addr),
       .imem_rdata(imem_rdata),
       .dmem_addr (dmem_addr),
@@ -61,9 +76,13 @@ module core_tb;
 
   // Synchronous reads (registered output), matching real BRAM: data for the
   // address driven this cycle arrives on imem_rdata/dmem_rdata next cycle.
+  // Reads also run throughout reset regardless of ce: the core's first
+  // enabled cycle already consumes the instruction at RESET_PC.
   always_ff @(posedge clk) begin
-    imem_rdata <= {mem[imem_addr+3], mem[imem_addr+2], mem[imem_addr+1], mem[imem_addr+0]};
-    dmem_rdata <= {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr+0]};
+    if (ce || !rst_n) begin
+      imem_rdata <= {mem[imem_addr+3], mem[imem_addr+2], mem[imem_addr+1], mem[imem_addr+0]};
+      dmem_rdata <= {mem[dmem_addr+3], mem[dmem_addr+2], mem[dmem_addr+1], mem[dmem_addr+0]};
+    end
   end
 
   logic test_done = 1'b0;
@@ -72,7 +91,7 @@ module core_tb;
 
   // Synchronous byte-strobed write + tohost snoop.
   always_ff @(posedge clk) begin
-    if (rst_n && (|dmem_wstrb)) begin
+    if (rst_n && ce && (|dmem_wstrb)) begin
       if (dmem_wstrb[0]) mem[dmem_addr+0] <= dmem_wdata[7:0];
       if (dmem_wstrb[1]) mem[dmem_addr+1] <= dmem_wdata[15:8];
       if (dmem_wstrb[2]) mem[dmem_addr+2] <= dmem_wdata[23:16];
@@ -91,6 +110,10 @@ module core_tb;
 
   initial begin
     cyc = 0;
+
+    if (!$value$plusargs("CE_FUZZ=%d", ce_fuzz)) begin
+      ce_fuzz = 0;
+    end
 
     for (int i = 0; i < MEM_BYTES; i++) mem[i] = 8'h00;
 
@@ -114,7 +137,7 @@ module core_tb;
 
     while (!test_done && cyc < max_cycles) begin
       @(posedge clk);
-      cyc++;
+      if (ce) cyc++;
     end
 
     if (!test_done) begin

@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjemalloc-dev \
     numactl \
     gtkwave \
+    device-tree-compiler \
  && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------------------

@@ -8,11 +8,12 @@
 // against this peripheral unmodified.
 //
 // mtime is the core's only notion of "time": a free-running 64-bit counter
-// incrementing by 1 every clock cycle (no divider yet — no FPGA target
-// frequency has been chosen, and simulation doesn't need wall-clock
-// accuracy). Once a real clock target is picked, a divide-by-N can be added
-// here without touching anything upstream; the DTB's `timebase-frequency`
-// just needs to keep matching whatever rate this produces.
+// incrementing by 1 every enabled clock cycle (no divider yet — simulation
+// doesn't need wall-clock accuracy). "Enabled" means ce is 1: when an FPGA
+// top holds the core for a slow memory, mtime counts the core's own cycles
+// rather than wall-clock time. A divide-by-N can be added here without
+// touching anything upstream; the DTB's `timebase-frequency` just needs to
+// keep matching whatever rate this produces.
 //
 // msip is present (readable/writable) purely for register-map completeness
 // — a single-hart core has no other hart to send a software interrupt to,
@@ -30,6 +31,7 @@
 module clint (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see soc_top.sv)
 
     // Local bus port — addr is the byte offset within CLINT's 64KB window
     // (interconnect has already stripped the base address).
@@ -82,7 +84,7 @@ module clint (
       mtime_q    <= 64'd0;
       mtimecmp_q <= 64'hFFFF_FFFF_FFFF_FFFF;  // never fire until software programs it
       msip_q     <= 32'd0;
-    end else begin
+    end else if (ce) begin
       // Free-running increment, unless software is writing this half this
       // cycle (software write wins over the auto-increment for that half).
       mtime_q[31:0] <= write_mtime_lo ? strobed_write(mtime_q[31:0], wdata, wstrb)
@@ -114,7 +116,7 @@ module clint (
   end
 
   always_ff @(posedge clk) begin
-    if (re) rdata <= rdata_next;
+    if (ce && re) rdata <= rdata_next;
   end
 
 endmodule

@@ -11,6 +11,7 @@
 module if_id_reg (
     input logic clk,
     input logic rst_n,
+    input logic ce,  // clock enable (see core_top.sv)
 
     input logic stall,
     input logic flush,
@@ -20,12 +21,18 @@ module if_id_reg (
 );
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n || flush) begin
+    if (!rst_n) begin
       q.pc    <= core_pkg::RESET_PC;
       q.instr <= core_pkg::NOP_INSTR;
       q.valid <= 1'b0;
-    end else if (!stall) begin
-      q <= d;
+    end else if (ce) begin
+      if (flush) begin
+        q.pc    <= core_pkg::RESET_PC;
+        q.instr <= core_pkg::NOP_INSTR;
+        q.valid <= 1'b0;
+      end else if (!stall) begin
+        q <= d;
+      end
     end
   end
 

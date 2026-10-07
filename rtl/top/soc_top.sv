@@ -15,6 +15,15 @@ module soc_top (
     input logic clk,
     input logic rst_n,
 
+    // Clock enable for the whole SoC's notion of a cycle: the core, the
+    // interconnect, CLINT (so mtime counts enabled cycles) and PLIC only
+    // advance on clock edges where ce is 1, and the external memory must do
+    // the same. The one exception is the UART's serial shifters, which keep
+    // real-time baud timing (see uart.sv). Tie to 1 for a memory that
+    // answers every cycle; an FPGA top with a slower memory pulses it once
+    // per completed memory access.
+    input logic ce,
+
     // Instruction memory port (straight through to external RAM)
     output core_pkg::xlen_t imem_addr,
     input  core_pkg::xlen_t imem_rdata,
@@ -55,6 +64,7 @@ module soc_top (
   core_top u_core_top (
       .clk       (clk),
       .rst_n     (rst_n),
+      .ce        (ce),
       .imem_addr (imem_addr),
       .imem_rdata(imem_rdata),
       .dmem_addr (cpu_dmem_addr),
@@ -69,6 +79,7 @@ module soc_top (
   data_bus u_data_bus (
       .clk        (clk),
       .rst_n      (rst_n),
+      .ce         (ce),
       .cpu_addr   (cpu_dmem_addr),
       .cpu_wdata  (cpu_dmem_wdata),
       .cpu_wstrb  (cpu_dmem_wstrb),
@@ -99,6 +110,7 @@ module soc_top (
   clint u_clint (
       .clk  (clk),
       .rst_n(rst_n),
+      .ce   (ce),
       .addr (clint_addr),
       .wdata(clint_wdata),
       .wstrb(clint_wstrb),
@@ -110,6 +122,7 @@ module soc_top (
   uart u_uart (
       .clk  (clk),
       .rst_n(rst_n),
+      .ce   (ce),
       .addr (uart_addr),
       .wdata(uart_wdata),
       .wstrb(uart_wstrb),
@@ -123,6 +136,7 @@ module soc_top (
   plic u_plic (
       .clk    (clk),
       .rst_n  (rst_n),
+      .ce     (ce),
       .addr   (plic_addr),
       .wdata  (plic_wdata),
       .wstrb  (plic_wstrb),
