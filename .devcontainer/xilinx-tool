@@ -1,0 +1,56 @@
+#!/bin/sh
+# ==========================================================
+# .devcontainer/xilinx-tool
+# Launcher for the Xilinx tools inside the dev container. The tools are not
+# installed in the image; the host's install is bind-mounted at $XILINX_ROOT
+# (see devcontainer.json). The Dockerfile symlinks this script as vivado,
+# xsdb, hw_server, ... so the command name selects which tool to run.
+#
+# Both install layouts are searched, <root>/<version>/Vivado/bin and
+# <root>/Vivado/<version>/bin, so the version does not have to be written
+# down anywhere. With several versions installed, the newest one wins.
+# ==========================================================
+
+tool=$(basename "$0")
+root=${XILINX_ROOT:-}
+
+if [ "$tool" = "xilinx-tool" ]; then
+    echo "usage: run this through one of its symlinks (vivado, xsdb, hw_server, ...)" >&2
+    exit 2
+fi
+
+if [ -z "$root" ] || [ ! -d "$root" ]; then
+    echo "$tool: no Xilinx install mounted (XILINX_ROOT='$root')." >&2
+    echo "$tool: check the mount in .devcontainer/devcontainer.json" >&2
+    exit 127
+fi
+
+found=
+for product in Vivado Vitis; do
+    for cand in "$root"/*/"$product"/bin/"$tool" "$root"/"$product"/*/bin/"$tool"; do
+        [ -x "$cand" ] && found=$cand
+    done
+    [ -n "$found" ] && break
+done
+
+if [ -z "$found" ]; then
+    echo "$tool: not found under $root (looked for */Vivado/bin, Vivado/*/bin and the same for Vitis)" >&2
+    exit 127
+fi
+
+# License: on the host Vivado picks the license up from the user's own
+# settings, which do not exist in here. Default to the license file kept at
+# the top of the install, unless the caller has already chosen one.
+if [ -z "${XILINXD_LICENSE_FILE:-}" ] && [ -f "$root/Xilinx.lic" ]; then
+    export XILINXD_LICENSE_FILE="$root/Xilinx.lic"
+fi
+
+# Without this, the license check aborts inside libudev ("mremap_chunk():
+# invalid pointer") when run in a container. Loading the system libudev ahead
+# of the tool's own libraries avoids it.
+udev_lib=/lib/x86_64-linux-gnu/libudev.so.1
+if [ -e "$udev_lib" ]; then
+    export LD_PRELOAD="$udev_lib${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
+
+exec "$found" "$@"
